@@ -529,3 +529,23 @@ loaded at startup from the working directory, the program directory or
 `~/.photo_organizer/`. A variable already present in the environment wins
 over the file. The file must be gitignored, and its values must never be
 logged.
+
+**R-L1** Every run writes a complete log to
+`~/.photo_organizer/logs/run-<timestamp>.log`, whether or not one was asked
+for, and the path is printed at startup. The last 20 are kept. It lives beside
+the database, not in the output tree, so the delete-and-retry recovery never
+destroys the record.
+
+**R-L2** An unhandled failure must be logged at ERROR with a full traceback,
+and the last frames must also reach the page. A traceback at DEBUG level is
+not recorded at the default level, which makes a crash unexplainable.
+
+**R-L3** A job's `status` is the LAST field set when it finishes. Readers poll
+it to decide the run is over; setting it before the record is complete lets a
+reader see "failed" with an empty explanation.
+
+**R-L4** Counts of failures are reported alongside samples. Ten failures and
+five hundred must not look identical.
+
+**R-L5** The console honours `--quiet`; the file never does. A quiet run is
+precisely the one that later needs reconstructing.

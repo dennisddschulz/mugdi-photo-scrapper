@@ -177,18 +177,63 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def setup_logging(quiet: bool, log_file: Path | None) -> None:
+# Runs are kept here, next to the analysis database rather than in the source
+# or output trees, so "delete the output and start again" never destroys the
+# record of what happened.
+LOG_DIR = Path("~/.photo_organizer/logs").expanduser()
+KEEP_LOGS = 20
+
+
+def _prune_logs(directory: Path, keep: int = KEEP_LOGS) -> None:
+    """Keep the last few runs. Unbounded logs are their own problem."""
+    try:
+        files = sorted(directory.glob("run-*.log"))
+        for stale in files[:-keep]:
+            stale.unlink(missing_ok=True)
+    except OSError as exc:
+        log.debug("Could not prune old logs: %s", exc)
+
+
+def setup_logging(quiet: bool, log_file: Path | None) -> Path | None:
+    """Log to the console and ALWAYS to a file.
+
+    The file is the point. A run takes hours and spends money, and until now
+    the only record lived in the terminal's scrollback -- closing the window
+    destroyed the evidence of what had been paid for and what had failed.
+
+    The console stays at the level asked for; the file is always INFO or
+    lower, because a quiet run is exactly the one you end up needing to
+    reconstruct.
+    """
+    from datetime import datetime
+
     level = logging.WARNING if quiet else logging.INFO
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
-    if log_file:
+    console = logging.StreamHandler(sys.stderr)
+    console.setLevel(level)
+    handlers: list[logging.Handler] = [console]
+
+    if log_file is None:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _prune_logs(LOG_DIR)
+        log_file = LOG_DIR / f"run-{datetime.now():%Y%m%d-%H%M%S}.log"
+    else:
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+
+    try:
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setLevel(logging.INFO)
+        handlers.append(handler)
+    except OSError as exc:
+        print(f"  (could not open {log_file}: {exc})", file=sys.stderr)
+        log_file = None
+
     logging.basicConfig(
-        level=level,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         handlers=handlers,
         force=True,
     )
+    return log_file
 
 
 def apply_cli_overrides(config: Config, args: argparse.Namespace) -> None:
@@ -219,7 +264,9 @@ def warn_on_name_collisions(plan) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    setup_logging(args.quiet, args.log_file)
+    log_path = setup_logging(args.quiet, args.log_file)
+    if log_path:
+        log.info("Logging this run to %s", log_path)
 
     if args.commit:
         log.error(

@@ -524,6 +524,40 @@ neighbouring summit in the right country passes: the model said
 "Salbitschijen" for a photo taken 13 km away and it was accepted, because
 Salbitschijen exists. Treat proposed names as proposals.
 
+## When something goes wrong
+
+Every run writes a complete log to `~/.photo_organizer/logs/run-<timestamp>.log`,
+and the path is printed at startup. The last 20 runs are kept. The log lives
+next to the database, not in the output tree, so "delete the output and start
+again" never destroys the record of what happened.
+
+| | Where |
+| --- | --- |
+| Live progress | the page, and the terminal |
+| Full history of a run | the log file |
+| Crash, with file and line | the log file **and** the page |
+| Per-photo copy failures | the copy summary, with a total and 20 samples |
+| A submitted batch job | the `batch_job` table, so it survives a restart |
+
+Four things were wrong when this was audited before the first real run, and
+they are worth knowing because they are the failure modes a log exists to
+prevent:
+
+- **Tracebacks went to `log.debug`**, and the default level is INFO — so they
+  were never recorded at all. A crash left `TypeError: ...` with no file, no
+  line, no stack. Now `ERROR`, and the last 12 frames also appear in the page.
+- **Nothing was written to a file.** The record lived in terminal scrollback;
+  closing the window destroyed the evidence of what had been paid for.
+- **The page's log held 400 lines.** A full run emits thousands, so the
+  beginning was dropped exactly when you went looking for it. Now 4,000, with
+  the complete record on disk regardless.
+- **Copy errors were reported as "the first ten"** with no total. Ten failures
+  and five hundred looked identical.
+
+A fifth was found while testing the fix: the job set its status to `error`
+*before* recording the traceback, so anything polling could see "finished" and
+read an incomplete explanation. Status is now the last thing set.
+
 ## Tests
 
 No test dependencies beyond the package's own:

@@ -2848,5 +2848,94 @@ class TestDotEnv(unittest.TestCase):
         ignore = Path(".gitignore").read_text(encoding="utf-8")
         self.assertIn(".env", ignore.split())
 
+class TestFailuresAreExplainable(unittest.TestCase):
+    """After a run that spends money, a failure must be reconstructable."""
+
+    def _state(self):
+        from photo_organizer.webapp import AppState
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        return AppState(Config(), root / "edits.toml")
+
+    def _wait(self, state):
+        import time as _time
+
+        for _ in range(200):
+            if state.job and state.job.status != "running":
+                return
+            _time.sleep(0.02)
+
+    def test_a_crash_records_a_full_traceback(self):
+        """The worst gap found: the traceback went to log.debug, so at the
+        default level it was never recorded at all. A crash left a bare
+        "TypeError: ..." with no file, no line and no stack."""
+        state = self._state()
+
+        def explode(job):
+            raise ZeroDivisionError("division by zero")
+
+        with self.assertLogs("photo_organizer.webapp", level="ERROR") as caught:
+            state.start_job("boom", explode)
+            self._wait(state)
+        joined = chr(10).join(caught.output)
+        self.assertIn("Traceback", joined)
+        self.assertIn("ZeroDivisionError", joined)
+        self.assertIn("explode", joined)
+
+    def test_the_traceback_also_reaches_the_page(self):
+        state = self._state()
+
+        def explode(job):
+            raise RuntimeError("something specific")
+
+        state.start_job("boom", explode)
+        self._wait(state)
+        shown = chr(10).join(state.job.log)
+        self.assertIn("RuntimeError", shown)
+        self.assertIn("Traceback", shown)
+        self.assertEqual(state.job.status, "error")
+
+    def test_the_job_log_holds_a_whole_run(self):
+        """A full run emits thousands of lines; 400 dropped the start."""
+        from photo_organizer.webapp import Job
+
+        self.assertGreaterEqual(Job(name="x").log.maxlen, 4000)
+
+    def test_a_log_file_is_written(self):
+        import logging as _logging
+
+        from photo_organizer.cli import setup_logging
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        path = setup_logging(quiet=False, log_file=root / "run.log")
+        self.assertIsNotNone(path)
+        _logging.getLogger("photo_organizer").info("a line that must survive")
+        self.assertIn("must survive", Path(path).read_text(encoding="utf-8"))
+
+    def test_a_quiet_run_still_writes_a_full_file(self):
+        """A quiet run is exactly the one you need to reconstruct later."""
+        import logging as _logging
+
+        from photo_organizer.cli import setup_logging
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        path = setup_logging(quiet=True, log_file=root / "quiet.log")
+        _logging.getLogger("photo_organizer").info("informational detail")
+        self.assertIn("informational detail",
+                      Path(path).read_text(encoding="utf-8"))
+
+    def test_copy_errors_report_a_total_not_just_a_sample(self):
+        """Ten failures and five hundred used to look identical."""
+        from photo_organizer.copier import CopyStats
+
+        stats = CopyStats()
+        stats.errors = ["file%d.jpg: disk full" % i for i in range(500)]
+        d = stats.to_dict()
+        self.assertEqual(d["error_count"], 500)
+        self.assertLessEqual(len(d["errors"]), 20)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -53,7 +53,10 @@ class CopyStats:
 
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
-        d["errors"] = self.errors[:10]
+        # The count matters as much as the samples: ten failures and five
+        # hundred looked identical when only the first ten were reported.
+        d["error_count"] = len(self.errors)
+        d["errors"] = self.errors[:20]
         d["gb_copied"] = round(self.bytes_copied / 1e9, 2)
         return d
 

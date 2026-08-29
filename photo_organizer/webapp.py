@@ -165,7 +165,11 @@ class Job:
     started: datetime = field(default_factory=datetime.now)
     finished: Optional[datetime] = None
     error: Optional[str] = None
-    log: deque = field(default_factory=lambda: deque(maxlen=400))
+    # Generous: a full run over 14,000 photos emits several thousand lines
+    # across scan, duplicates, analysis and copy, and the beginning is
+    # exactly what someone goes looking for after a failure. The complete
+    # record is on disk regardless -- this is only what the page can show.
+    log: deque = field(default_factory=lambda: deque(maxlen=4000))
     completed_steps: list[str] = field(default_factory=list)
     _cancel: threading.Event = field(default_factory=threading.Event)
 
@@ -260,22 +264,35 @@ class AppState:
             try:
                 target(job)
                 if job.cancelled:
-                    job.status = "cancelled"
                     job.say("Cancelled. Nothing was written.")
+                    job.status = "cancelled"
                 else:
                     job.status = "done"
             except Cancelled:
-                job.status = "cancelled"
                 job.say("Cancelled. Nothing was written.")
+                job.status = "cancelled"
             except UnsafePathError as exc:
-                job.status = "error"
                 job.error = str(exc)
                 job.say(f"Refused: {exc}")
-            except Exception as exc:
+                log.error("Job %r refused an unsafe path: %s", job.name, exc)
                 job.status = "error"
+            except Exception as exc:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.say(f"Failed: {job.error}")
-                log.debug("Job failed\n%s", traceback.format_exc())
+                # ERROR, not DEBUG. At the default level a debug traceback is
+                # discarded, which left a crash with no file, no line and no
+                # stack -- unexplainable after the fact, which is the one
+                # thing a log has to prevent.
+                trace = traceback.format_exc()
+                log.error("Job %r failed\n%s", job.name, trace)
+                # And into the page's own log, so it is visible without
+                # going to find the file.
+                for line in trace.strip().splitlines()[-12:]:
+                    job.log.append(f"        {line}")
+                # LAST. Anything watching the job polls this field to decide
+                # the run is over; setting it before the record is complete
+                # means a reader can see "failed" and an empty explanation.
+                job.status = "error"
             finally:
                 job.finished = datetime.now()
 
@@ -1440,6 +1457,13 @@ def serve_app(
               flush=True)
         print("  Reachable only from this machine. Requests from a web page,", flush=True)
         print("  or under any other hostname, are refused.", flush=True)
+    # Where the full record is, said once, so it can be found after a
+    # failure without knowing to look for it.
+    for handler in logging.getLogger().handlers:
+        path = getattr(handler, "baseFilename", None)
+        if path:
+            print(f"  Full log: {path}", flush=True)
+            break
     print("  Click Quit in the page, or press Ctrl+C here, to stop.\n", flush=True)
 
     if not state.renderer.available:
