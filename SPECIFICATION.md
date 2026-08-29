@@ -385,6 +385,25 @@ matters:
 is no scaling argument for one, and the single-file database is the property
 that makes the paid-for analyses easy to back up. See CLAUDE.md.
 
+**R-U1** The control panel binds loopback only and requires a token. This is
+not ceremony: `127.0.0.1` is reachable by every program on the machine and by
+any web page the user has open, and the API browses directories and copies
+files.
+
+**R-U2** The token is **persistent** (`~/.photo_organizer/ui_token`), so the
+URL is stable and bookmarkable. A per-run token was the reason to want the
+protection removed, which is the worst of the three outcomes. Deleting the
+file rotates it.
+
+**R-U3** After the first tokened visit the token is held in an `HttpOnly;
+SameSite=Strict` cookie, so the bare URL works thereafter. It is accepted from
+query string, cookie, or `X-Photo-Organizer-Token` header.
+
+**R-U4** State-changing requests additionally verify `Origin`, and refuse any
+value that is not this server. A browser sets `Origin` itself and a page
+cannot forge it, so this holds even if the token leaks. A missing `Origin`
+means a non-browser client and is allowed.
+
 ---
 
 ## 6. Suggested implementation stack (reference, not binding)

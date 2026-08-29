@@ -214,7 +214,7 @@ class AppState:
         # unplugged drive costs nothing at startup.
         self.suggested_source = config.paths.default_source
         self.suggested_output = config.paths.default_output
-        self.token = secrets.token_urlsafe(24)
+        self.token = load_or_create_token()
         self.renderer = ThumbnailRenderer()
         self.source: Optional[Path] = None
         self.output: Optional[Path] = None
@@ -496,8 +496,51 @@ class AppHandler(BaseHTTPRequestHandler):
         )
 
     def _authorized(self, query: dict[str, list[str]]) -> bool:
-        supplied = (query.get("t") or [""])[0]
-        return secrets.compare_digest(supplied, self.state.token)
+        """Is this request from the person who started the server?
+
+        Three ways to prove it, so the URL only has to carry the token once:
+        the query string, the cookie set on that first visit, or an explicit
+        header from the page's own fetch calls.
+        """
+        candidates = [
+            (query.get("t") or [""])[0],
+            self.headers.get("X-Photo-Organizer-Token", ""),
+            self._cookie_token(),
+        ]
+        return any(
+            supplied and secrets.compare_digest(supplied, self.state.token)
+            for supplied in candidates
+        )
+
+    def _cookie_token(self) -> str:
+        raw = self.headers.get("Cookie", "")
+        for part in raw.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == COOKIE_NAME:
+                return value
+        return ""
+
+    def _same_origin(self) -> bool:
+        """Reject requests a browser says came from somewhere else.
+
+        A token in a URL can be shoulder-surfed, logged, or pasted into a
+        chat. This is the second lock: a page on another site can still make
+        the browser SEND a request here, but the browser will label it with
+        its own Origin, and that label is not forgeable by the page.
+
+        No Origin header at all means a non-browser client (curl, the tests,
+        a script), which cannot be a cross-site attack.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host, port = self.server.server_address[:2]
+        allowed = {
+            f"http://{host}:{port}",
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        }
+        return origin in allowed
 
     def _body(self) -> Optional[dict]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -532,10 +575,19 @@ class AppHandler(BaseHTTPRequestHandler):
             except OSError as exc:
                 self._send(500, f"UI missing: {exc}".encode(), "text/plain")
                 return
+            # Hand the token back as a cookie so every later visit can use
+            # the bare URL. HttpOnly keeps it out of reach of page scripts;
+            # SameSite=Strict means a browser will not attach it to a request
+            # started by any other site.
             self._send(
                 200,
                 html.replace(b"__TOKEN__", self.state.token.encode()),
                 "text/html; charset=utf-8",
+                extra={
+                    "Set-Cookie":
+                        f"{COOKIE_NAME}={self.state.token}; Path=/; HttpOnly;"
+                        " SameSite=Strict; Max-Age=31536000",
+                },
             )
             return
 
@@ -562,6 +614,12 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        # Origin first: these are the routes that scan drives and copy files,
+        # so a request a browser itself labels as coming from another site is
+        # refused before the token is even considered.
+        if not self._same_origin():
+            self._json(403, {"error": "cross-site request refused"})
+            return
         if not self._authorized(query):
             self._json(403, {"error": "bad token"})
             return
@@ -997,6 +1055,53 @@ def make_server(state: AppState, port: int = DEFAULT_PORT) -> ThreadingHTTPServe
     return _AppServer(("127.0.0.1", port), handler)
 
 
+# The UI token lives beside the analysis database, not in the source tree,
+# and outlives a single run so the URL can be bookmarked.
+TOKEN_PATH = Path("~/.photo_organizer/ui_token").expanduser()
+
+
+COOKIE_NAME = "photo_organizer_token"
+
+
+def load_or_create_token(path: Path = TOKEN_PATH) -> str:
+    """The stable token for this machine's UI, creating one if needed.
+
+    Persisted deliberately. A per-run token meant a new URL every time and
+    nothing you could bookmark, which is what made people want to turn the
+    protection off altogether -- the worst outcome of the three.
+    """
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if len(existing) >= 24:
+            return existing
+    except OSError:
+        pass
+
+    token = secrets.token_urlsafe(24)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(token, encoding="utf-8")
+        # Best effort on Windows, meaningful on anything POSIX.
+        try:
+            path.chmod(0o600)
+        except (OSError, NotImplementedError):
+            pass
+    except OSError as exc:
+        # A token we cannot store still protects this run; it just will not
+        # give a stable URL. Never fail to start over this.
+        log.warning("Could not save the UI token to %s: %s", path, exc)
+    return token
+
+
+def reset_token(path: Path = TOKEN_PATH) -> str:
+    """Throw the saved token away and make a new one."""
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return load_or_create_token(path)
+
+
 def serve_app(
     config: Config,
     edits_path: Path,
@@ -1028,10 +1133,15 @@ def serve_app(
 
     host, bound = server.server_address[:2]
     url = f"http://{host}:{bound}/?t={state.token}"
+    plain = f"http://{host}:{bound}/"
 
     print("\n  Photo Organizer is running. Nothing has been written.", flush=True)
     print(f"    {url}", flush=True)
-    print("  The token in that link is what makes it yours; it dies with this run.", flush=True)
+    print(f"  After the first visit, {plain} works on its own -- bookmark that.",
+          flush=True)
+    print("  The token stays the same between runs. It is what stops another",
+          flush=True)
+    print("  program, or a web page you have open, driving this app.", flush=True)
     print("  Click Quit in the page, or press Ctrl+C here, to stop.\n", flush=True)
 
     if not state.renderer.available:

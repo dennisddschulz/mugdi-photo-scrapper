@@ -11,6 +11,7 @@ import json
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2167,6 +2168,102 @@ class TestDatabaseLocation(unittest.TestCase):
             self.assertTrue(legacy.exists())
         finally:
             db.DEFAULT_DB, db.LEGACY_DB = original_default, original_legacy
+
+
+class TestUiToken(unittest.TestCase):
+    """The URL must be stable AND the app must stay un-drivable by web pages."""
+
+    def test_the_token_survives_a_restart(self):
+        from photo_organizer.webapp import load_or_create_token
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        path = root / "ui_token"
+
+        first = load_or_create_token(path)
+        self.assertGreaterEqual(len(first), 24)
+        self.assertEqual(load_or_create_token(path), first,
+                         "a new token each run means a new URL each run")
+
+    def test_a_token_that_cannot_be_saved_still_starts(self):
+        """Never refuse to start over a token file."""
+        from photo_organizer.webapp import load_or_create_token
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        blocked = root / "a-file" / "ui_token"
+        (root / "a-file").write_text("not a directory", encoding="utf-8")
+
+        token = load_or_create_token(blocked)
+        self.assertGreaterEqual(len(token), 24)
+
+    def test_a_short_or_empty_file_is_replaced(self):
+        from photo_organizer.webapp import load_or_create_token
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        path = root / "ui_token"
+        path.write_text("", encoding="utf-8")
+        self.assertGreaterEqual(len(load_or_create_token(path)), 24)
+
+    def test_reset_makes_a_different_one(self):
+        from photo_organizer.webapp import load_or_create_token, reset_token
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        path = root / "ui_token"
+        first = load_or_create_token(path)
+        self.assertNotEqual(reset_token(path), first)
+
+
+class TestCrossSiteProtection(unittest.TestCase):
+    """127.0.0.1 is reachable from any page the user has open."""
+
+    class _Handler:
+        """Just enough of the handler to exercise the two checks."""
+
+        def __init__(self, headers, token, port=8080):
+            from photo_organizer.webapp import AppHandler
+
+            self.headers = headers
+            self.state = types.SimpleNamespace(token=token)
+            self.server = types.SimpleNamespace(server_address=("127.0.0.1", port))
+            self._authorized = AppHandler._authorized.__get__(self)
+            self._cookie_token = AppHandler._cookie_token.__get__(self)
+            self._same_origin = AppHandler._same_origin.__get__(self)
+
+    def test_a_cookie_alone_authorises(self):
+        h = self._Handler({"Cookie": "photo_organizer_token=secret-value-1234567890"},
+                          "secret-value-1234567890")
+        self.assertTrue(h._authorized({}))
+
+    def test_the_wrong_cookie_does_not(self):
+        h = self._Handler({"Cookie": "photo_organizer_token=wrong"},
+                          "secret-value-1234567890")
+        self.assertFalse(h._authorized({}))
+
+    def test_no_credentials_at_all(self):
+        self.assertFalse(self._Handler({}, "secret-value-1234567890")._authorized({}))
+
+    def test_our_own_origin_is_allowed(self):
+        for origin in ("http://127.0.0.1:8080", "http://localhost:8080"):
+            h = self._Handler({"Origin": origin}, "t" * 24)
+            self.assertTrue(h._same_origin(), origin)
+
+    def test_another_site_is_refused(self):
+        """Even holding a valid token: the browser labels the origin."""
+        h = self._Handler({"Origin": "https://evil.example.com",
+                           "Cookie": "photo_organizer_token=" + "t" * 24}, "t" * 24)
+        self.assertTrue(h._authorized({}), "the token itself is valid")
+        self.assertFalse(h._same_origin(), "but the request is cross-site")
+
+    def test_a_different_port_on_localhost_is_refused(self):
+        h = self._Handler({"Origin": "http://127.0.0.1:9999"}, "t" * 24)
+        self.assertFalse(h._same_origin())
+
+    def test_no_origin_header_is_allowed(self):
+        """curl and the tests send none, and cannot be a cross-site attack."""
+        self.assertTrue(self._Handler({}, "t" * 24)._same_origin())
 
 
 if __name__ == "__main__":

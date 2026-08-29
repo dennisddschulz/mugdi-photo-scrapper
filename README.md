@@ -82,14 +82,45 @@ stops an invented summit name reaching a folder.
 
 ## Use
 
+Double-click `start.bat`, or from a console:
+
 ```bash
 python -m photo_organizer --serve
 ```
 
-Opens `http://127.0.0.1:8080`. Pick folders, run the pipeline, review the
-result, and copy when you are satisfied. It is not a service: it starts when
-you ask and stops when you click Quit, binds loopback only, and is behind a
-one-time token printed in the terminal.
+On Windows, `python` on the PATH is often the Microsoft Store stub, which
+silently does nothing. `start.bat` finds the real interpreter for you; by hand
+you may need the full path, e.g.
+`%LOCALAPPDATA%\Programs\Python\Python312\python.exe`.
+
+Then open **`http://127.0.0.1:8080/`**. Pick folders, run the pipeline, review
+the result, and copy when you are satisfied. It is not a service: it starts
+when you ask and stops when you click Quit, and it binds loopback only.
+
+`start.bat --port 8090` if something already holds 8080.
+
+### Why there is a token, and why the URL is still stable
+
+`127.0.0.1` is **not** private. Any program on the machine can reach it, and
+so can any web page you have open — a browser will happily send a request to
+`http://127.0.0.1:8080` from a page on the internet. This app browses
+directories and copies files, so an unauthenticated `POST /api/run` from a
+random page would be a real hazard.
+
+The token stops that. It used to be regenerated per run, which meant a new URL
+every time and nothing you could bookmark. Now:
+
+- the token is **stored** in `~/.photo_organizer/ui_token` and reused, so the
+  URL never changes;
+- the first visit sets it as an `HttpOnly; SameSite=Strict` cookie, so
+  afterwards the **bare `http://127.0.0.1:8080/` works** — bookmark that;
+- state-changing requests additionally check `Origin`, so a page on another
+  site is refused **even if it somehow has the token**.
+
+Verified end to end: bare URL 200, no credentials 403, and a cross-site POST
+carrying a valid cookie 403 `cross-site request refused`.
+
+To rotate it, delete `~/.photo_organizer/ui_token` and restart.
 
 For analysis you need a Gemini API key:
 
