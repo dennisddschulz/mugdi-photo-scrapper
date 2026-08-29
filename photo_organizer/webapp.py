@@ -1047,8 +1047,14 @@ class AppHandler(BaseHTTPRequestHandler):
                         setattr(job, "current", label),
                     ),
                     should_cancel=lambda: job.cancelled,
+                    duplicate_groups=state.duplicate_groups,
                 )
                 state.set_plan(plan)
+                if stats.better_duplicate_chosen:
+                    job.say(
+                        f"  {stats.better_duplicate_chosen} duplicate group(s) "
+                        "kept a better frame than file size would have picked"
+                    )
                 job.say(
                     f"  {stats.named_from_peak} from a peak, "
                     f"{stats.named_from_crag} from a crag, "
@@ -1196,6 +1202,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 on_step=on_step,
                 on_progress=on_progress,
                 should_cancel=lambda: job.cancelled,
+                duplicate_groups=state.duplicate_groups,
             )
             # The plan object was mutated in place; refresh the photo index
             # and the built-at stamp so the UI reloads it.

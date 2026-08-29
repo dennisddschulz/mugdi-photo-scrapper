@@ -158,6 +158,9 @@ class AnalyzeStats:
     # deleted.
     empty_frames: int = 0
     pocket_shots: int = 0
+    # Duplicate groups whose keeper changed once the photos had
+    # actually been looked at, rather than ranked by file size.
+    better_duplicate_chosen: int = 0
     named_from_peak: int = 0
     named_from_crag: int = 0
     named_from_region: int = 0
@@ -174,7 +177,10 @@ class AnalyzeStats:
 
 
 def select_photos(
-    event: Event, per_event: int, prefer_scenic: bool = True
+    event: Event,
+    per_event: int,
+    prefer_scenic: bool = True,
+    include_duplicates: bool = False,
 ) -> list[Photo]:
     """Choose which photos of an event are worth analysing.
 
@@ -185,7 +191,12 @@ def select_photos(
     """
     usable = [
         p for p in event.photos
-        if getattr(p, "duplicate_role", None) in (None, "keep")
+        # Duplicates are normally skipped -- paying thirty times to learn what
+        # one frame says is the whole point of finding them. They ARE included
+        # when the caller intends to choose between them on photographic
+        # merit, which needs every candidate looked at.
+        if (include_duplicates
+            or getattr(p, "duplicate_role", None) in (None, "keep"))
         and getattr(p, "reject_reason", None) is None
     ] or event.photos
     if not usable:
@@ -715,8 +726,14 @@ def analyze_plan(
     on_progress: Optional[Callable[[int, int, str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
     wait_for_batch: bool = True,
+    duplicate_groups: Optional[Sequence] = None,
 ) -> AnalyzeStats:
-    """Analyse the plan's photos and rewrite event names from the results."""
+    """Analyse the plan's photos and rewrite event names from the results.
+
+    `duplicate_groups`, when given, has its keeper re-chosen from what the
+    model saw rather than from file size -- which is a different question
+    and usually a different answer.
+    """
     from .batch import SUCCESS_STATES, GeminiBatch, estimate_cost_usd
     from .db import AnalysisStore
     from .dedupe import content_hash
@@ -749,7 +766,8 @@ def analyze_plan(
     # --- what needs analysing -------------------------------------------
     chosen: list[tuple[str, Photo]] = []
     for event in targets:
-        for photo in select_photos(event, settings.photos_per_event):
+        for photo in select_photos(event, settings.photos_per_event,
+                                   include_duplicates=settings.judge_duplicates):
             # Reuse the key the duplicate pass already computed. Re-reading
             # 14,000 files off an external drive to learn what we were just
             # told is minutes of pure waste.
@@ -858,6 +876,22 @@ def analyze_plan(
             known[key] = analysis
         store.update_job(job_name, state, finished=True)
         say(f"Stored {stats.returned} analysis result(s); {stats.failed} failed.")
+
+    # --- choose the best of each duplicate group -------------------------
+    # Now, not before: this is the first point at which anything has
+    # actually looked at the pictures. The file-size ranking that ran during
+    # detection answered "which is the biggest", which is not the question.
+    if duplicate_groups:
+        from .dedupe import best_by_analysis, mark_duplicates
+
+        changed = best_by_analysis(duplicate_groups, known)
+        stats.better_duplicate_chosen = changed
+        mark_duplicates(duplicate_groups)
+        say(
+            f"Reviewed {len(duplicate_groups)} duplicate group(s) on sharpness, "
+            f"composition and gaze; {changed} kept a different frame than "
+            "file size alone would have."
+        )
 
     # --- name the events -------------------------------------------------
     for position, event in enumerate(targets, start=1):

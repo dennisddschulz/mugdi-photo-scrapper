@@ -509,3 +509,17 @@ other. A test asserts a dark grainy frame is not called empty.
 excluded from the paid analysis. Detection is asymmetric by design: a missed
 pocket shot is one file in a folder, a wrong rejection is a photograph the
 user has to go looking for.
+
+**R-F16** The duplicate kept in the library is chosen on **photographic
+merit** -- sharpness, gaze, blinks, composition, rating -- from the model's
+reading, not on file size. Every member of a group is analysed so there is
+something to compare (627 extra photos on this library, $0.13). Ties fall
+back to the file-size ranking, and the reason for each choice is reported.
+
+**R-F17** Near-duplicate group members must be within `NEAR_WINDOW_SECONDS`
+(24 hours) of each other. Perceptual similarity alone grouped 13 sets
+spanning over 30 days on the real library, one covering 538 days, sweeping 40
+unrelated photographs together -- dark night shots hash close to each other.
+Measured distribution: 511 groups under a minute, 4 under an hour, none
+between an hour and 30 days, 13 over a month. A photo with no timestamp is
+still allowed in, so a re-encoded copy that lost its EXIF is not missed.

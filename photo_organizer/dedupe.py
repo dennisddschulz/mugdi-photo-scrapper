@@ -113,6 +113,23 @@ def content_hash(path: Path, size_bytes: int = 0) -> Optional[str]:
 # Measured on this library: two unrelated photos hashed 0/64 and 4/64 bits
 # set and were "duplicates" at distance 4. Requiring a spread of set bits
 # rejects images the hash cannot describe. Real photos sit near 32/64.
+# Near-duplicates must also be CLOSE IN TIME. A perceptual hash on its own
+# groups unrelated pictures that merely look alike -- measured on the real
+# library, 13 groups spanned more than 30 days and swept 40 unrelated
+# photographs together, mostly dark night shots whose hashes collapse
+# towards each other. One group held 7 frames taken over 538 days.
+#
+# The distribution makes the cut obvious: 511 groups span under a minute
+# (real bursts), 4 span under an hour, NOTHING falls between an hour and 30
+# days, and 13 span more than a month. A day is generous on the right side
+# of that gap.
+#
+# The case this gives up is a copy of a photo whose EXIF was stripped, so
+# its timestamp came from the file's mtime years later. That costs one
+# extra copy in the library. The alternative cost is real photographs
+# exiled to _duplicates_review/, which is worse.
+NEAR_WINDOW_SECONDS = 24 * 3600
+
 MIN_HASH_BITS = 12
 MAX_HASH_BITS = 52
 
@@ -195,7 +212,17 @@ def hamming(a: int, b: int) -> int:
 
 
 def _score(photo: Photo) -> tuple:
-    """Rank a photo within a duplicate group. Higher is better to keep."""
+    """Rank a photo within a duplicate group, before anything has looked at it.
+
+    This is the fallback, and it answers "which is the biggest file", not
+    "which is the better photograph". Within a burst from one camera the
+    pixel count is identical and the byte count differs only by how well
+    that frame compressed -- which can favour the noisier one.
+
+    `best_by_analysis` replaces this once the photos have been analysed.
+    Kept because it is all there is before then, and because a group whose
+    members failed to analyse still needs an answer.
+    """
     pixels = (photo.width or 0) * (photo.height or 0)
     return (
         pixels,
@@ -205,6 +232,101 @@ def _score(photo: Photo) -> tuple:
     )
 
 
+# How much each judgement counts when choosing between near-identical frames.
+# Sharpness first: a blurred keeper is not a keeper. Then whether the people
+# are looking at the camera, which is the usual reason one frame of a burst
+# is the one you want. Composition and the overall rating break the rest.
+_SHARPNESS_RANK = {"sharp": 3, "acceptable": 2, "unknown": 1, "blurry": 0}
+_GAZE_RANK = {"all_facing": 3, "some_facing": 2, "no_people": 1,
+              "unknown": 1, "none_facing": 0}
+_COMPOSITION_RANK = {"good": 3, "ordinary": 2, "unknown": 1, "poor": 0}
+
+
+def photographic_score(analysis) -> tuple:
+    """Rank one frame on how good a PHOTOGRAPH it is. Higher is better.
+
+    Only ever used to compare frames of the same subject inside one
+    duplicate group. Across different photographs this would be taste
+    presented as measurement.
+    """
+    if analysis is None:
+        return ()
+    closed = analysis.eyes_closed_count or 0
+    return (
+        _SHARPNESS_RANK.get(analysis.sharpness, 1),
+        _GAZE_RANK.get(analysis.gaze, 1),
+        -closed,                       # fewer blinks is better
+        _COMPOSITION_RANK.get(analysis.composition, 1),
+        analysis.aesthetic_score or 0,
+        1 if analysis.exposure == "good" else 0,
+    )
+
+
+def explain_choice(analysis) -> str:
+    """Why this frame was picked, in words the user can check against it."""
+    if analysis is None:
+        return "largest file (no analysis available)"
+    bits = [f"{analysis.sharpness}"]
+    if analysis.gaze not in ("no_people", "unknown"):
+        bits.append(analysis.gaze.replace("_", " "))
+    if analysis.eyes_closed_count:
+        bits.append(f"{analysis.eyes_closed_count} blinking")
+    if analysis.composition != "unknown":
+        bits.append(f"{analysis.composition} composition")
+    if analysis.aesthetic_score:
+        bits.append(f"rated {analysis.aesthetic_score}/5")
+    return ", ".join(bits)
+
+
+def best_by_analysis(groups, analyses: dict) -> int:
+    """Re-pick each group's keeper using what the model saw.
+
+    `analyses` maps a photo's content key to its PhotoAnalysis. Groups whose
+    members were not analysed keep the file-size answer, which is why that
+    fallback still exists.
+
+    Returns how many groups changed their mind, which is worth reporting:
+    it is the measure of how much this was worth doing.
+    """
+    changed = 0
+    for group in groups:
+        scored = [
+            (photographic_score(analyses.get(p.content_key)), p)
+            for p in group.photos
+        ]
+        judged = [(s, p) for s, p in scored if s]
+        if len(judged) < 2:
+            continue
+        # Ties fall back to the file-size ranking rather than to list order.
+        winner = max(judged, key=lambda item: (item[0], _score(item[1])))[1]
+        if winner is not group.best:
+            changed += 1
+        group.best = winner
+        group.reason = explain_choice(analyses.get(winner.content_key))
+    return changed
+
+
+def _close_in_time(members: Sequence[Photo], candidate: Photo,
+                   window_seconds: float) -> bool:
+    """Was this taken close enough to the others to be the same moment?
+
+    Looking alike is not enough. Two dark photographs a year apart hash
+    close together and are not duplicates of anything.
+
+    A photo with no timestamp is allowed in: refusing it would break the
+    genuine case of a re-encoded copy that lost its metadata, and it is
+    still held to the perceptual test.
+    """
+    if window_seconds <= 0 or candidate.timestamp is None:
+        return True
+    for member in members:
+        if member.timestamp is None:
+            continue
+        if abs((member.timestamp - candidate.timestamp).total_seconds()) > window_seconds:
+            return False
+    return True
+
+
 def find_duplicates(
     photos: Sequence[Photo],
     workers: int = 16,
@@ -212,6 +334,7 @@ def find_duplicates(
     progress: Optional[Callable[[int, int], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
     blank_check: bool = True,
+    near_window_seconds: float = NEAR_WINDOW_SECONDS,
 ) -> tuple[list[DuplicateGroup], DedupeStats]:
     """Group photos into exact and near-duplicate sets.
 
@@ -335,7 +458,7 @@ def find_duplicates(
                     if all(
                         hamming(existing, other_hash) <= NEAR_THRESHOLD
                         for existing in member_hashes
-                    ):
+                    ) and _close_in_time(members, other, near_window_seconds):
                         members.append(other)
                         member_hashes.append(other_hash)
                 if len(members) < 2:
@@ -344,7 +467,10 @@ def find_duplicates(
                     seen.add(id(member))
                 group = DuplicateGroup(kind="near", photos=members)
                 group.best = max(members, key=_score)
-                group.reason = f"perceptually similar (dHash within {NEAR_THRESHOLD} bits)"
+                group.reason = (
+                    f"perceptually similar (dHash within {NEAR_THRESHOLD} bits) "
+                    "and taken close together"
+                )
                 groups.append(group)
                 stats.near_groups += 1
                 stats.near_duplicates += len(members) - 1

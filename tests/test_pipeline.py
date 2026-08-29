@@ -2590,5 +2590,179 @@ class TestPocketShots(unittest.TestCase):
         self.assertTrue(all(p.reject_reason is None for p in chosen))
 
 
+class TestBestOfDuplicates(unittest.TestCase):
+    """Which frame of a burst gets kept, and why."""
+
+    def _photo(self, name, width=4000, height=3000, size=3_000_000):
+        photo = make_photo(name)
+        photo.width, photo.height, photo.size_bytes = width, height, size
+        photo.content_key = name
+        return photo
+
+    def _analysis(self, **kw):
+        from photo_organizer.schema import PhotoAnalysis
+
+        base = dict(sharpness="sharp", gaze="all_facing", composition="good",
+                    aesthetic_score=4, exposure="good", eyes_closed_count=0)
+        base.update(kw)
+        return PhotoAnalysis(**base)
+
+    def _group(self, photos):
+        from photo_organizer.dedupe import DuplicateGroup, _score
+
+        group = DuplicateGroup(kind="near", photos=photos)
+        group.best = max(photos, key=_score)
+        return group
+
+    def test_the_sharp_frame_wins_over_the_bigger_file(self):
+        """The whole point: biggest file is not the same as best photograph."""
+        from photo_organizer.dedupe import best_by_analysis
+
+        blurry_big = self._photo("blurry.jpg", size=5_000_000)
+        sharp_small = self._photo("sharp.jpg", size=2_000_000)
+        group = self._group([blurry_big, sharp_small])
+        self.assertIs(group.best, blurry_big, "file size picks the big one")
+
+        changed = best_by_analysis([group], {
+            "blurry.jpg": self._analysis(sharpness="blurry"),
+            "sharp.jpg": self._analysis(sharpness="sharp"),
+        })
+        self.assertIs(group.best, sharp_small)
+        self.assertEqual(changed, 1)
+
+    def test_people_looking_at_the_camera_wins(self):
+        from photo_organizer.dedupe import best_by_analysis
+
+        looking_away = self._photo("away.jpg", size=5_000_000)
+        looking_at = self._photo("facing.jpg", size=2_000_000)
+        group = self._group([looking_away, looking_at])
+        best_by_analysis([group], {
+            "away.jpg": self._analysis(gaze="none_facing"),
+            "facing.jpg": self._analysis(gaze="all_facing"),
+        })
+        self.assertIs(group.best, looking_at)
+
+    def test_a_blink_loses(self):
+        from photo_organizer.dedupe import best_by_analysis
+
+        blinking = self._photo("blink.jpg", size=5_000_000)
+        eyes_open = self._photo("open.jpg", size=2_000_000)
+        group = self._group([blinking, eyes_open])
+        self.assertIs(group.best, blinking, "file size picks the bigger one")
+        best_by_analysis([group], {
+            "blink.jpg": self._analysis(eyes_closed_count=2),
+            "open.jpg": self._analysis(eyes_closed_count=0),
+        })
+        self.assertIs(group.best, eyes_open)
+
+    def test_composition_breaks_a_tie(self):
+        from photo_organizer.dedupe import best_by_analysis
+
+        poor = self._photo("poor.jpg", size=5_000_000)
+        good = self._photo("good.jpg", size=2_000_000)
+        group = self._group([poor, good])
+        best_by_analysis([group], {
+            "poor.jpg": self._analysis(composition="poor"),
+            "good.jpg": self._analysis(composition="good"),
+        })
+        self.assertIs(group.best, good)
+
+    def test_an_unanalysed_group_keeps_the_file_size_answer(self):
+        """Never worse than before, even with nothing to go on."""
+        from photo_organizer.dedupe import best_by_analysis
+
+        big = self._photo("big.jpg", size=5_000_000)
+        small = self._photo("small.jpg", size=2_000_000)
+        group = self._group([big, small])
+        self.assertEqual(best_by_analysis([group], {}), 0)
+        self.assertIs(group.best, big)
+
+    def test_the_choice_is_explained(self):
+        """The user has to be able to check it against the picture."""
+        from photo_organizer.dedupe import best_by_analysis
+
+        group = self._group([self._photo("a.jpg"), self._photo("b.jpg")])
+        best_by_analysis([group], {
+            "a.jpg": self._analysis(sharpness="blurry"),
+            "b.jpg": self._analysis(sharpness="sharp", aesthetic_score=5),
+        })
+        self.assertIn("sharp", group.reason)
+        self.assertIn("5/5", group.reason)
+
+    def test_group_members_are_analysed_so_there_is_something_to_compare(self):
+        from photo_organizer.analyze import select_photos
+
+        photos = [make_photo(f"{i}.jpg") for i in range(4)]
+        photos[1].duplicate_role = "near"
+        photos[2].duplicate_role = "near"
+        event = Event(index=1, photos=photos)
+        self.assertEqual(len(select_photos(event, 0)), 2)
+        self.assertEqual(
+            len(select_photos(event, 0, include_duplicates=True)), 4,
+            "choosing between duplicates needs every candidate looked at")
+
+    def test_rejected_frames_stay_out_even_when_duplicates_are_included(self):
+        from photo_organizer.analyze import select_photos
+
+        photos = [make_photo(f"{i}.jpg") for i in range(3)]
+        photos[0].duplicate_role = "near"
+        photos[1].reject_reason = "black"
+        event = Event(index=1, photos=photos)
+        chosen = select_photos(event, 0, include_duplicates=True)
+        self.assertEqual(len(chosen), 2)
+        self.assertTrue(all(p.reject_reason is None for p in chosen))
+
+
+class TestNearDuplicateTimeWindow(unittest.TestCase):
+    """Looking alike is not enough to be the same photograph."""
+
+    def _photo(self, name, when, phash_seed):
+        photo = make_photo(name)
+        photo.timestamp = when
+        photo.content_key = name
+        return photo
+
+    def test_photos_a_year_apart_are_not_duplicates(self):
+        """Measured on the real library: 13 groups spanned over 30 days and
+        swept 40 unrelated photographs together -- one held 7 frames taken
+        over 538 days. Dark night shots hash close to each other."""
+        from photo_organizer.dedupe import _close_in_time, NEAR_WINDOW_SECONDS
+
+        a = self._photo("a.jpg", datetime(2019, 10, 13, 9, 1), 0)
+        b = self._photo("b.jpg", datetime(2021, 4, 3, 17, 11), 0)
+        self.assertFalse(_close_in_time([a], b, NEAR_WINDOW_SECONDS))
+
+    def test_a_burst_is_still_a_burst(self):
+        from photo_organizer.dedupe import _close_in_time, NEAR_WINDOW_SECONDS
+
+        a = self._photo("a.jpg", datetime(2020, 3, 7, 12, 26, 36), 0)
+        b = self._photo("b.jpg", datetime(2020, 3, 7, 12, 26, 38), 0)
+        self.assertTrue(_close_in_time([a], b, NEAR_WINDOW_SECONDS))
+
+    def test_a_copy_made_the_same_day_still_counts(self):
+        from photo_organizer.dedupe import _close_in_time, NEAR_WINDOW_SECONDS
+
+        a = self._photo("a.jpg", datetime(2019, 12, 1, 13, 8), 0)
+        b = self._photo("a_1.jpg", datetime(2019, 12, 1, 19, 30), 0)
+        self.assertTrue(_close_in_time([a], b, NEAR_WINDOW_SECONDS))
+
+    def test_a_photo_with_no_timestamp_is_not_excluded(self):
+        """Refusing it would break re-encoded copies that lost their EXIF."""
+        from photo_organizer.dedupe import _close_in_time, NEAR_WINDOW_SECONDS
+
+        a = self._photo("a.jpg", datetime(2020, 1, 1, 12, 0), 0)
+        b = self._photo("b.jpg", None, 0)
+        self.assertTrue(_close_in_time([a], b, NEAR_WINDOW_SECONDS))
+
+    def test_the_window_must_hold_against_every_member(self):
+        """Not just the seed -- otherwise a chain drifts across months."""
+        from photo_organizer.dedupe import _close_in_time
+
+        early = self._photo("a.jpg", datetime(2020, 1, 1, 12, 0), 0)
+        late = self._photo("b.jpg", datetime(2020, 1, 2, 6, 0), 0)
+        candidate = self._photo("c.jpg", datetime(2020, 1, 2, 18, 0), 0)
+        self.assertFalse(_close_in_time([early, late], candidate, 24 * 3600))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

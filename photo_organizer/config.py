@@ -196,6 +196,12 @@ class AnalysisConfig:
     # than this from a place name READ out of the same event's photos. The
     # gazetteer cannot catch this on its own: it only knows a name exists,
     # which is how "Salbitschijen" was accepted for an event 13 km away.
+    # Analyse EVERY member of a duplicate group, not just the one the file-
+    # size rule picked, so the keeper is chosen on sharpness, composition and
+    # whether people are looking at the camera. Measured on this library:
+    # 528 groups, 627 extra photos, $0.13 at batch rates. Turning this off
+    # falls back to "biggest file wins", which is not the same question.
+    judge_duplicates: bool = True
     peak_contradiction_km: float = 30.0
     # A summit must reach this probability to name a folder or to have its
     # coordinates written into the files. Below it the event is named by

@@ -26,7 +26,7 @@ import dataclasses
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Enumerations are closed sets so results are groupable rather than free
 # text with forty spellings of "ice climbing".
@@ -43,6 +43,15 @@ SCENES = [
     "hut_or_refuge", "food", "people_portrait", "animal", "plant",
     "vehicle", "document_or_screen", "sign_or_board", "other", "unknown",
 ]
+
+# How well the picture is put together, for choosing between near-identical
+# frames. Only ever compared WITHIN a group of the same subject -- across
+# different photographs it would be taste dressed up as measurement.
+COMPOSITIONS = ["good", "ordinary", "poor", "unknown"]
+
+# Whether the people in the frame are looking at the camera with their eyes
+# open. The single most common reason one frame of a burst is the keeper.
+GAZES = ["all_facing", "some_facing", "none_facing", "no_people", "unknown"]
 
 SEASONS = ["winter", "spring", "summer", "autumn", "unknown"]
 TIMES_OF_DAY = ["dawn", "morning", "midday", "afternoon", "dusk", "night", "unknown"]
@@ -131,6 +140,17 @@ def response_schema() -> dict[str, Any]:
             "exposure": s("string", enum=["good", "underexposed", "overexposed", "unknown"]),
             "aesthetic_score": s("integer", nullable=True,
                                  description="1-5, coarse. 3 is ordinary."),
+            "composition": s("string", enum=COMPOSITIONS,
+                             description="How well framed and balanced the "
+                                         "picture is: horizon level, subject "
+                                         "not cut off, not obstructed."),
+            "gaze": s("string", enum=GAZES,
+                      description="Are the people looking at the camera with "
+                                  "their eyes open? 'no_people' if nobody is "
+                                  "in the frame."),
+            "eyes_closed_count": s("integer", nullable=True,
+                                   description="People with closed eyes or "
+                                               "mid-blink, or null."),
 
             # --- free form ---------------------------------------------
             "caption": s("string", nullable=True,
@@ -207,7 +227,15 @@ PROMPT = (
     "6. place_names_visible: every place name legible anywhere in the frame, "
     "as a list. This is separate from visible_text and is the field the "
     "folder naming reads first.\n"
-    "7. latitude/longitude: your best estimate of where the camera stood, "
+    "7. composition, gaze and eyes_closed_count decide which frame of a "
+    "burst of near-identical shots is kept, so judge them carefully and "
+    "consistently. composition: is the horizon level, the subject whole and "
+    "unobstructed, the framing deliberate. gaze: are the people looking at "
+    "the camera with their eyes open ('no_people' if nobody is in frame). "
+    "eyes_closed_count: how many are blinking.\n"
+    "8. sharpness must describe the SUBJECT. A portrait with a deliberately "
+    "blurred background is sharp.\n"
+    "9. latitude/longitude: your best estimate of where the camera stood, "
     "or null.\n"
     "Photos are mostly from the European Alps (Switzerland, France, "
     "Italy, Austria), the Tatras, Scandinavia, and Mediterranean climbing "
@@ -282,6 +310,9 @@ class PhotoAnalysis:
     sharpness: str = "unknown"
     exposure: str = "unknown"
     aesthetic_score: Optional[int] = None
+    composition: str = "unknown"
+    gaze: str = "unknown"
+    eyes_closed_count: Optional[int] = None
 
     caption: Optional[str] = None
     keywords: list[str] = field(default_factory=list)
@@ -407,6 +438,9 @@ class PhotoAnalysis:
             sharpness=choice("sharpness", ["sharp", "acceptable", "blurry", "unknown"], "unknown"),
             exposure=choice("exposure", ["good", "underexposed", "overexposed", "unknown"], "unknown"),
             aesthetic_score=whole("aesthetic_score"),
+            composition=choice("composition", COMPOSITIONS, "unknown"),
+            gaze=choice("gaze", GAZES, "unknown"),
+            eyes_closed_count=whole("eyes_closed_count"),
             caption=text("caption"),
             keywords=strings("keywords"),
             reasoning=text("reasoning"),

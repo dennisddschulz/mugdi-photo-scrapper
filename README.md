@@ -71,6 +71,41 @@ re-request.
 **Duplicates are detected before analysis**, so a burst of 30 near-identical
 frames costs one analysis rather than 30.
 
+### Which duplicate gets kept
+
+Not the biggest file — **the best photograph**. Every frame in a group is
+analysed (627 extra photos across this library, **$0.13**) and the keeper is
+chosen on, in order:
+
+1. **sharpness** — a blurred keeper is not a keeper
+2. **gaze** — are the people looking at the camera
+3. **blinks** — fewer is better
+4. **composition** — horizon level, subject whole and unobstructed
+5. **rating**, then exposure
+
+Ties fall back to the old file-size ranking, and the preview says *why* each
+one was chosen, so you can check it against the picture.
+
+Measured on a real 7-frame group: file size picked a **blurry, poor
+composition, rated 1/5** frame because it was the largest at 2.7 MB. The new
+ranking picks a **sharp, good composition, rated 4/5** frame instead.
+
+Turn it off with `judge_duplicates = false` and it reverts to biggest-file,
+which is a different question.
+
+### Near-duplicates must also be close in time
+
+Looking alike is not enough. Measured on this library, perceptual hashing
+alone put **13 groups spanning more than 30 days** together — one held 7
+frames taken over **538 days** — because dark night photographs hash close to
+one another. That would have exiled **40 unrelated photographs** into
+`_duplicates_review/`.
+
+The distribution made the cut obvious: 511 groups span under a minute, 4
+under an hour, **nothing at all between an hour and 30 days**, then 13 over a
+month. Members must now be within **24 hours** of each other. Result: 0 groups
+span more than a day, and the widest is now 10 minutes.
+
 ## Install
 
 Requires Python 3.11+.
