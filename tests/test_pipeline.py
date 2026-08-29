@@ -1906,9 +1906,36 @@ class TestPeakCorroboration(unittest.TestCase):
             any("% likely" in e for e in event.evidence), event.evidence
         )
 
-    def test_every_photo_is_analysed_by_default(self):
-        """0 means all. Sampling saved cents and lost peaks."""
-        self.assertEqual(Config().analysis.photos_per_event, 0)
+    def test_a_few_chosen_photos_per_event_by_default(self):
+        """Analysing everything cost $32 at the measured rate. Four chosen
+        photos per event cost about $3.50 and take minutes, and naming an
+        event does not need every photo of it."""
+        self.assertEqual(Config().analysis.photos_per_event, 4)
+
+    def test_the_sample_is_chosen_not_spread(self):
+        """Only ~27% of these photos show a placeable skyline, so an even
+        sample spends most of the budget on frames that cannot name
+        anything."""
+        from photo_organizer.analyze import select_photos
+
+        photos = [make_photo("%02d.jpg" % i) for i in range(20)]
+        for i, photo in enumerate(photos):
+            photo.scenic_score = 0.1
+        photos[3].scenic_score = 2.9      # a skyline
+        photos[17].scenic_score = 2.6     # another
+        event = Event(index=1, photos=photos)
+
+        chosen = select_photos(event, 2)
+        self.assertEqual({p.source_path.name for p in chosen},
+                         {"03.jpg", "17.jpg"})
+
+    def test_it_falls_back_to_spreading_when_nothing_is_scored(self):
+        """A plan built without the duplicate pass still has to work."""
+        from photo_organizer.analyze import select_photos
+
+        photos = [make_photo("%02d.jpg" % i) for i in range(20)]
+        chosen = select_photos(Event(index=1, photos=photos), 4)
+        self.assertEqual(len(chosen), 4)
 
     def test_zero_means_every_photo(self):
         from photo_organizer.analyze import select_photos

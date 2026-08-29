@@ -342,6 +342,7 @@ def find_duplicates(
     modified on disk and nothing is deleted.
     """
     from .blanks import inspect as inspect_frame
+    from .scenic import score as scenic_score
 
     stats = DedupeStats(scanned=len(photos))
     if not photos:
@@ -380,6 +381,11 @@ def find_duplicates(
             frame = inspect_frame(photo.source_path, head=head)
             if frame is not None and frame.is_empty:
                 photo.reject_reason = frame.reason
+            # Same thumbnail, one more cheap measurement: how likely this
+            # frame is to be worth analysing.
+            promise = scenic_score(photo.source_path, head=head)
+            if promise is not None:
+                photo.scenic_score = promise.score
         return (
             photo,
             key,

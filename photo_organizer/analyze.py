@@ -22,6 +22,7 @@ Three things survive from the earlier work because they are not models:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -206,6 +207,20 @@ def select_photos(
     # sampling decision that has to be revisited whenever a name is missed.
     if per_event <= 0 or len(usable) <= per_event:
         return list(usable)
+
+    if prefer_scenic and any(p.scenic_score for p in usable):
+        # Choose, do not spread. Only about 27% of this library shows a
+        # placeable skyline, so an even sample through an event spends most
+        # of the budget on close-ups of gear and hands that could never name
+        # anything. The score comes free from the duplicate pass.
+        #
+        # Ties break on time so the choice is stable between runs.
+        ranked = sorted(
+            usable,
+            key=lambda p: (-p.scenic_score, p.timestamp or datetime.min),
+        )
+        return ranked[:per_event]
+
     step = len(usable) / per_event
     return [usable[int(i * step)] for i in range(per_event)]
 

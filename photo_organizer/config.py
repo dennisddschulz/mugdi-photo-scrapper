@@ -140,14 +140,18 @@ class AnalysisConfig:
     GeoCLIP had a 139 km median error.
     """
 
-    # How many photos of each event get analysed. **0 means every photo.**
+    # How many photos of each event get analysed. 0 means every photo.
     #
-    # Sampling was a false economy. Each photo is analysed once in its life
-    # and the full reply is cached forever, so the whole library costs a few
-    # dollars once, in batch, and nothing after that. Sampling saved cents
-    # and lost peaks: only ~27% of these photos show a placeable skyline, so
-    # any sample misses events whose one identifiable frame was not picked.
-    photos_per_event: int = 0
+    # Four, not all of them. This library has 379 events and 13,748 photos;
+    # analysing everything costs about $32 at the measured rate, and four
+    # chosen photos per event costs about $3.50 and takes minutes instead of
+    # an hour. Naming an event does not need every photo of it.
+    #
+    # They are CHOSEN, not spread: the duplicate pass scores every frame for
+    # sky over terrain and landscape framing, and the best few are sent.
+    # Only ~27% of these photos show a placeable skyline, so choosing rather
+    # than sampling is most of the value.
+    photos_per_event: int = 4
     # Ceiling on new photos submitted in one run, so a first run on a large
     # library cannot produce a surprise bill. 0 removes the ceiling.
     # Ceiling on NEW photos per run. 0 removes it. The whole library in one

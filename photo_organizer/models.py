@@ -64,6 +64,11 @@ class Photo:
     # Kept so the analysis stage does not have to read and hash every file a
     # second time, and so the cost of a run can be quoted without doing so.
     content_key: Optional[str] = None
+    # How promising this frame looks for naming a place -- sky over terrain,
+    # landscape framing. Set during the duplicate pass from the thumbnail it
+    # has already read, so it costs nothing. Used to choose which few photos
+    # of an event are worth paying to analyse.
+    scenic_score: float = 0.0
 
     @property
     def has_gps(self) -> bool:

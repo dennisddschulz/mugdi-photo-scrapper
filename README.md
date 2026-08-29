@@ -322,6 +322,38 @@ full one drops messages rather than blocking, since the plan is reloaded when
 the run finishes anyway. A test publishes 1,000 messages to a listener that
 never reads and asserts it stays fast.
 
+## Choosing which photos to analyse
+
+Naming 379 events does not need 13,748 analyses. It needs a few photos of
+each — and **the right few**.
+
+Only about 27% of this library shows a placeable skyline; the rest is
+close-ups of climbers, gear, hands and food that could never name anything.
+So the sample is **chosen, not spread**: the duplicate pass already reads each
+photo's thumbnail, and scoring it for sky over terrain and landscape framing
+costs nothing extra.
+
+| | Photos | Cost | Encode + upload |
+| --- | --- | --- | --- |
+| Every photo | 13,748 | $32.31 | 64 min |
+| **4 chosen per event** | **1,516** | **$3.56** | **7 min** |
+
+Verified by looking: the top-scoring frames from a 400-photo sample were
+granite spires, the Mont Blanc massif at sunset, a sea cliff, and climbers on
+snowy ridges. Scoring runs at 79 photos/second.
+
+**There is deliberately no page detection in the scorer.** Two attempts failed
+against real data: brightness plus edges scored a portrait of a person 3.17
+and an actual guidebook page 0.0 — wrong in both directions — and adding
+saturation still scored the page 0.0. At 96 pixels printed text averages into
+grey. Detecting a page needs resolution, which is the one thing this scorer
+exists to avoid spending, so pages are left to OCR or to the model — both of
+which actually read.
+
+**Image size does not affect cost.** Measured with `countTokens`: 1024px,
+768px, 512px and 384px are all exactly **1,064 tokens**. Smaller images are
+still worth it for speed and upload size, not for price.
+
 ## Quotas
 
 The account limit is not on spending, it is on **how much you enqueue at
