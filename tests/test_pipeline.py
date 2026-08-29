@@ -776,20 +776,40 @@ class TestWebApp(unittest.TestCase):
                 self.assertEqual(status, 400)
                 self.assertIn("not implemented", data["error"])
 
+    def _wait_for_job(self, timeout=60.0):
+        """Block until the background job finishes, or fail saying why.
+
+        A wall-clock deadline, not a fixed iteration count: the old
+        "100 x 50 ms" waited five seconds regardless of how loaded the
+        machine was, and failed about one run in four when something else
+        was using the disk.
+        """
+        import time as _time
+
+        deadline = _time.monotonic() + timeout
+        data = None
+        while _time.monotonic() < deadline:
+            _status, data = self.json_call("/api/status")
+            job = data.get("job")
+            if job and job["status"] != "running":
+                return data
+            _time.sleep(0.05)
+        job = (data or {}).get("job") or {}
+        self.fail(
+            f"job did not finish within {timeout:.0f}s "
+            f"(status={job.get('status')!r}, step={job.get('step')!r}, "
+            f"{job.get('done_count')}/{job.get('total')})"
+        )
+
     def _ensure_plan(self) -> None:
         """Give the shared app state a plan, so copy reaches its own gate."""
-        import time
 
         self.json_call(
             "/api/paths", "POST",
             {"source": str(self.source), "output": str(self.output)},
         )
         self.json_call("/api/run", "POST", {"step": "plan"})
-        for _ in range(100):
-            _status, data = self.json_call("/api/status")
-            if data["job"] and data["job"]["status"] != "running":
-                break
-            time.sleep(0.05)
+        self._wait_for_job()
 
     def test_copying_requires_explicit_confirmation(self):
         """The one step that creates files must not run on a stray click."""
@@ -839,7 +859,6 @@ class TestWebApp(unittest.TestCase):
                 self.assertIsNone(bare.plan)
 
     def test_running_the_plan_produces_a_plan_and_writes_nothing(self):
-        import time
 
         self.json_call(
             "/api/paths", "POST", {"source": str(self.source), "output": str(self.output)}
@@ -848,13 +867,7 @@ class TestWebApp(unittest.TestCase):
         status, _ = self.json_call("/api/run", "POST", {"step": "plan"})
         self.assertEqual(status, 200)
 
-        for _ in range(100):
-            _, data = self.json_call("/api/status")
-            if data["job"] and data["job"]["status"] != "running":
-                break
-            time.sleep(0.05)
-
-        _, data = self.json_call("/api/status")
+        data = self._wait_for_job()
         self.assertEqual(data["job"]["status"], "done", data["job"].get("error"))
         self.assertTrue(data["has_plan"])
         _, plan = self.json_call("/api/plan")
@@ -2858,13 +2871,16 @@ class TestFailuresAreExplainable(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, True)
         return AppState(Config(), root / "edits.toml")
 
-    def _wait(self, state):
+    def _wait(self, state, timeout=30.0):
+        """Wall clock, not an iteration count -- see _wait_for_job."""
         import time as _time
 
-        for _ in range(200):
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
             if state.job and state.job.status != "running":
                 return
             _time.sleep(0.02)
+        self.fail(f"job did not finish within {timeout:.0f}s")
 
     def test_a_crash_records_a_full_traceback(self):
         """The worst gap found: the traceback went to log.debug, so at the
