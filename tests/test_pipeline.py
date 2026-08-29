@@ -11,6 +11,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import types
 import unittest
 from datetime import datetime, timedelta
@@ -2952,6 +2953,124 @@ class TestFailuresAreExplainable(unittest.TestCase):
         d = stats.to_dict()
         self.assertEqual(d["error_count"], 500)
         self.assertLessEqual(len(d["errors"]), 20)
+
+class TestLiveUpdates(unittest.TestCase):
+    """Names and coordinates reach the page while the run is still going."""
+
+    def _state(self):
+        from photo_organizer.webapp import AppState
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        return AppState(Config(), root / "edits.toml")
+
+    def test_a_subscriber_receives_what_is_published(self):
+        state = self._state()
+        channel = state.subscribe()
+        state.publish("event", {"index": 7, "proposed_name": "Eiger_01_09"})
+        message = channel.get(timeout=2)
+        self.assertEqual(message["kind"], "event")
+        self.assertEqual(message["index"], 7)
+        self.assertEqual(message["proposed_name"], "Eiger_01_09")
+
+    def test_every_subscriber_gets_a_copy(self):
+        state = self._state()
+        a, b = state.subscribe(), state.subscribe()
+        state.publish("event", {"index": 1})
+        self.assertEqual(a.get(timeout=2)["index"], 1)
+        self.assertEqual(b.get(timeout=2)["index"], 1)
+
+    def test_unsubscribing_stops_delivery(self):
+        import queue as _queue
+
+        state = self._state()
+        channel = state.subscribe()
+        state.unsubscribe(channel)
+        state.publish("event", {"index": 1})
+        with self.assertRaises(_queue.Empty):
+            channel.get(timeout=0.2)
+
+    def test_a_stalled_listener_cannot_block_the_pipeline(self):
+        """A tab that has gone away must not be able to stall analysis."""
+        import time as _time
+
+        state = self._state()
+        state.subscribe()          # never drained
+        started = _time.monotonic()
+        for i in range(1000):      # far more than the queue holds
+            state.publish("event", {"index": i})
+        self.assertLess(_time.monotonic() - started, 5.0,
+                        "publishing must never block on a slow listener")
+
+    def test_publishing_with_no_listeners_is_harmless(self):
+        state = self._state()
+        state.publish("event", {"index": 1})
+
+    def test_the_stream_endpoint_speaks_server_sent_events(self):
+        import threading as _threading
+        import urllib.request as _request
+
+        from photo_organizer.webapp import make_server
+
+        state = self._state()
+        server = make_server(state, 0)
+        port = server.server_address[1]
+        _threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        got = []
+
+        def listen():
+            try:
+                url = "http://127.0.0.1:%d/api/events" % port
+                with _request.urlopen(url, timeout=10) as response:
+                    got.append(response.headers.get("Content-Type"))
+                    for raw in response:
+                        text = raw.decode("utf-8").rstrip()
+                        if text.startswith("data: "):
+                            got.append(json.loads(text[6:]))
+                            return
+            except Exception as exc:
+                got.append("failed: %s" % exc)
+
+        reader = _threading.Thread(target=listen, daemon=True)
+        reader.start()
+        for _ in range(100):
+            if state._listeners:
+                break
+            time.sleep(0.05)
+        state.publish("event", {"index": 42, "proposed_name": "Dibona_03_07"})
+        reader.join(timeout=10)
+
+        self.assertTrue(got, "nothing came back from the stream")
+        self.assertIn("text/event-stream", got[0])
+        payload = got[-1]
+        self.assertIsInstance(payload, dict, payload)
+        self.assertEqual(payload["index"], 42)
+        self.assertEqual(payload["proposed_name"], "Dibona_03_07")
+
+    def test_naming_an_event_notifies_the_listener(self):
+        """The callback the analysis uses, wired to the broadcast."""
+        from photo_organizer.analyze import apply_to_event, summarise_event
+        from photo_organizer.schema import PhotoAnalysis
+        from photo_organizer.webapp import _publish_event
+
+        state = self._state()
+        channel = state.subscribe()
+        event = Event(index=3, photos=[make_photo("a.jpg")])
+        merged = summarise_event(event, [PhotoAnalysis(
+            peak_name="Dibona", verified_peak="Dibona", verified_lat=44.96,
+            verified_lon=6.20, mountain_range="Ecrins",
+            activity="alpine_climbing", evidence_basis="sign_in_scene")] * 2)
+        apply_to_event(event, merged, Config(), None)
+        _publish_event(state, event)
+
+        message = channel.get(timeout=2)
+        self.assertEqual(message["index"], 3)
+        self.assertEqual(message["name_source"], "peak")
+        self.assertIn("Dibona", message["proposed_name"])
+        self.assertEqual(message["place_name"], "Dibona")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -727,6 +727,7 @@ def analyze_plan(
     should_cancel: Optional[Callable[[], bool]] = None,
     wait_for_batch: bool = True,
     duplicate_groups: Optional[Sequence] = None,
+    on_event_named: Optional[Callable[[Event], None]] = None,
 ) -> AnalyzeStats:
     """Analyse the plan's photos and rewrite event names from the results.
 
@@ -950,6 +951,16 @@ def analyze_plan(
             stats.still_unknown += 1
             continue
         source = apply_to_event(event, merged, config, location)
+        # Tell whoever is watching, immediately. A run over 13,000 photos
+        # takes long enough that seeing folders acquire real names as it
+        # goes is the difference between "it is working" and "it is working
+        # well" -- and the second is what you actually want to know.
+        if on_event_named is not None:
+            try:
+                on_event_named(event)
+            except Exception as exc:
+                # A listener must never be able to break the analysis.
+                log.debug("on_event_named failed: %s", exc)
         if source == "peak":
             stats.named_from_peak += 1
         elif source == "crag":

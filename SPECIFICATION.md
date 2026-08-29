@@ -549,3 +549,20 @@ five hundred must not look identical.
 
 **R-L5** The console honours `--quiet`; the file never does. A quiet run is
 precisely the one that later needs reconstructing.
+
+**R-U8** Results must reach the page as they are produced, not when the run
+ends. Identification is streamed over server-sent events at `/api/events`;
+each named event publishes its folder name, name source, place, range, region,
+agreed coordinates and evidence.
+
+**R-U9** Publishing must never block the pipeline. Each listener has a bounded
+queue; a full queue drops the message rather than waiting. A browser tab that
+has gone away or cannot keep up must not be able to stall analysis, and the
+plan is refetched when the run ends regardless.
+
+**R-U10** A live update must not overwrite a name the user is editing or has
+already changed.
+
+**R-U11** Folders that could not be identified carry no badge. A marker on
+every folder conveys nothing; region-only and activity-only names are marked
+distinctly so a guess is never presented as a find.

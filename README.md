@@ -531,6 +531,35 @@ neighbouring summit in the right country passes: the model said
 "Salbitschijen" for a photo taken 13 km away and it was accepted, because
 Salbitschijen exists. Treat proposed names as proposals.
 
+## Watching it work
+
+Identifying 13,000 photos takes a while, and a progress bar only tells you it
+is *running*. The page streams results as they are produced, over
+server-sent events (`/api/events`), so folders acquire real names, coordinates
+and tags **while the run is still going** — no refresh, no polling for it.
+
+Each identified folder gets a badge saying what was found:
+
+| Badge | Meaning |
+| --- | --- |
+| **peak identified** | a summit, verified against the gazetteer |
+| **crag identified** | a named crag or sector |
+| region identified | placed, but no specific feature — amber, not green |
+| activity only | nothing but what was being done — amber |
+
+Hovering shows the evidence behind it: the place, the range, the agreed
+coordinates and the reasoning. Folders that could not be identified get **no
+badge at all** — a badge on everything would say nothing. The card pulses once
+when it updates, and nothing persists afterwards, because a permanently
+highlighted card is noise after the first minute.
+
+A name you are editing is never overwritten by an incoming update.
+
+The stream cannot stall the pipeline: each listener has a bounded queue and a
+full one drops messages rather than blocking, since the plan is reloaded when
+the run finishes anyway. A test publishes 1,000 messages to a listener that
+never reads and asserts it stays fast.
+
 ## When something goes wrong
 
 Every run writes a complete log to `~/.photo_organizer/logs/run-<timestamp>.log`,

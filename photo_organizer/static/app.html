@@ -111,6 +111,25 @@ select.num { width: auto; font-family: inherit; }
 .name-input:hover { border-color: var(--line-2); }
 .name-input:focus { outline: none; border-color: var(--accent); background: var(--panel); }
 .name-input.edited { background: color-mix(in srgb, var(--accent) 9%, var(--panel-2)); }
+
+/* A folder Gemini could put a name to. Green rather than the accent red,
+   because red already means "careful" everywhere else in this page. */
+.found { display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  font-weight: 650; padding: 2px 8px; border-radius: 100px;
+  background: var(--ok-bg); color: var(--ok-ink); white-space: nowrap; }
+.found.weak { background: var(--warn-bg); color: var(--warn-ink); }
+.found::before { content: "\2713"; font-size: 10px; }
+.found.weak::before { content: "\2022"; }
+
+/* One pulse when a card updates live, so a change is noticed without
+   watching for it. Nothing persistent -- a permanently highlighted card
+   would just be noise after the first minute. */
+@keyframes justfound {
+  0%   { border-color: var(--ok-ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok-ink) 22%, transparent); }
+  100% { border-color: var(--line); box-shadow: var(--shadow); }
+}
+.event.justfound { animation: justfound 1.6s ease-out; }
+@media (prefers-reduced-motion: reduce) { .event.justfound { animation: none; } }
 .hint { font-size: 11.5px; color: var(--warn-ink); margin-top: 6px; font-family: var(--mono); }
 .meta { margin-top: 9px; font-size: 13px; color: var(--ink-2); display: flex; gap: 12px; flex-wrap: wrap; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
@@ -424,6 +443,92 @@ async function pushSettings() {
   } catch (e) { msg("cfgMsg", e.message, "err"); }
 }
 for (const id of ["gapIn", "distIn", "geoIn"]) $(id).onchange = pushSettings;
+
+/* ---------------- what Gemini found ---------------- */
+
+/* A mark on folders that got a real name, and nothing on the ones that did
+   not -- a badge on every card would say nothing at all. "weak" covers the
+   names that came from the region or the activity rather than a place, so a
+   guess is never dressed up as a find. */
+function foundBadge(ev) {
+  if (!ev.name_source || ev.name_source === "none") return null;
+  const label = {
+    peak: "peak identified",
+    crag: "crag identified",
+    region: "region identified",
+    activity: "activity only",
+  }[ev.name_source] || ev.name_source;
+  const b = el("span", "found", label);
+  if (ev.name_source === "region" || ev.name_source === "activity") {
+    b.classList.add("weak");
+  }
+  const bits = [];
+  if (ev.place_name) bits.push(ev.place_name);
+  if (ev.mountain_range) bits.push(ev.mountain_range);
+  if (ev.region) bits.push(ev.region);
+  if (ev.lat != null) bits.push(ev.lat.toFixed(4) + ", " + ev.lon.toFixed(4));
+  if (ev.evidence && ev.evidence.length) bits.push(...ev.evidence);
+  if (bits.length) b.title = bits.join("\n");
+  return b;
+}
+
+/* ---------------- live updates ---------------- */
+
+/* Server-sent events, so names and coordinates appear the moment they are
+   worked out rather than when the whole run finishes. One-way and small, so
+   EventSource rather than a websocket -- and it reconnects by itself. */
+let liveSource = null;
+
+function startLive() {
+  if (liveSource || typeof EventSource === "undefined") return;
+  try {
+    liveSource = new EventSource(api("/api/events"));
+  } catch (e) {
+    return;  // no live updates; polling still shows progress
+  }
+  liveSource.onmessage = (msg) => {
+    let data;
+    try { data = JSON.parse(msg.data); } catch (e) { return; }
+    if (data.kind === "event") applyLiveEvent(data);
+  };
+  liveSource.onerror = () => {
+    // EventSource retries on its own. Nothing to do, and nothing to alarm
+    // the user with: the plan is refetched when the run ends regardless.
+  };
+}
+
+function applyLiveEvent(data) {
+  if (!PLAN || !PLAN.events) return;
+  const ev = PLAN.events.find((e) => e.index === data.index);
+  if (!ev) return;
+  // Update the plan we hold, so a re-render keeps what just arrived.
+  Object.assign(ev, {
+    proposed_name: data.proposed_name, rel_dir: data.rel_dir,
+    name_source: data.name_source, place_name: data.place_name,
+    mountain_range: data.mountain_range, region: data.region,
+    country: data.country, activity: data.activity,
+    lat: data.lat, lon: data.lon, evidence: data.evidence,
+  });
+
+  const card = document.querySelector(`[data-event="${data.index}"]`);
+  if (!card) return;
+
+  // Never overwrite a name the user is editing or has already changed.
+  const input = card.querySelector(".name-input");
+  if (input && document.activeElement !== input && !isEdited(ev)) {
+    input.value = nameOf(ev);
+  }
+  const row = card.querySelector(".name-row");
+  if (row) {
+    const old = row.querySelector(".found");
+    if (old) old.remove();
+    const badge = foundBadge(ev);
+    if (badge) row.append(badge);
+  }
+  card.classList.remove("justfound");
+  void card.offsetWidth;            // restart the animation
+  card.classList.add("justfound");
+}
 
 /* ---------------- pipeline ---------------- */
 $("runBtn").onclick = async () => {
@@ -747,6 +852,9 @@ function renderResults() {
 function renderEvent(ev, prevKept) {
   const s = st(ev.index);
   const card = el("div", "event");
+  // Addressed by index so a live update can find and patch this one card
+  // instead of re-rendering the whole list under the user's cursor.
+  card.dataset.event = ev.index;
   if (s.merge && prevKept) {
     card.classList.add("merged");
     const bar = el("div", "merged-bar");
@@ -773,7 +881,10 @@ function renderEvent(ev, prevKept) {
   };
   input.oninput = () => { s.name = input.value; input.classList.toggle("edited", input.value !== ev.proposed_name); setHint(); $("saveBtn").disabled = dirtyCount() === 0; };
   setHint();
-  row.append(input); main.append(row, hint);
+  row.append(input);
+  const badge = foundBadge(ev);
+  if (badge) row.append(badge);
+  main.append(row, hint);
 
   const meta = el("div", "meta");
   meta.append(el("span", null, range(ev)), el("span", null, ev.photo_count + " photos"), el("span", null, bytes(ev.size_bytes)));
@@ -1002,6 +1113,9 @@ function showOpenedWrongPage() {
 (async function init() {
   if (servedFromDisk()) { showOpenedWrongPage(); return; }
   await refresh();
+  // Connect once, and stay connected. Names and coordinates then appear as
+  // they are worked out rather than when the whole run finishes.
+  startLive();
   if (STATUS && STATUS.job && STATUS.job.status === "running") startPolling();
 })();
 </script>

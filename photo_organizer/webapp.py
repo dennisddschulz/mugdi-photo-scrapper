@@ -235,11 +235,50 @@ class AppState:
         self.photos_by_id: list[Photo] = []
         self.last_saved: Optional[str] = None
         self.duplicate_groups: list = []
+        # Live subscribers, one queue each. A slow or vanished reader must
+        # never block the pipeline, so a full queue simply drops the message
+        # -- the page refetches the plan when the run ends anyway.
+        self._listeners: list = []
+        self._listener_lock = threading.Lock()
         self.duplicate_stats = None
         self.copy_stats = None
         self._lock = threading.Lock()
 
     # -- plan access ------------------------------------------------------
+
+    # -- live updates -----------------------------------------------------
+
+    def subscribe(self):
+        """A queue that will receive every published update."""
+        import queue
+
+        channel = queue.Queue(maxsize=200)
+        with self._listener_lock:
+            self._listeners.append(channel)
+        return channel
+
+    def unsubscribe(self, channel) -> None:
+        with self._listener_lock:
+            if channel in self._listeners:
+                self._listeners.remove(channel)
+
+    def publish(self, kind: str, payload: dict) -> None:
+        """Send one update to every listener. Never blocks, never raises.
+
+        A browser tab that has gone away, or one that cannot keep up, must
+        not be able to stall the analysis. Dropping a message is fine: the
+        page reloads the plan when the run finishes.
+        """
+        import queue
+
+        message = {"kind": kind, **payload}
+        with self._listener_lock:
+            listeners = list(self._listeners)
+        for channel in listeners:
+            try:
+                channel.put_nowait(message)
+            except queue.Full:
+                log.debug("A live listener is not keeping up; dropping an update")
 
     def set_plan(self, plan: Plan) -> None:
         self.plan = plan
@@ -482,6 +521,29 @@ def browse(path_str: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def _publish_event(state, event) -> None:
+    """Push one freshly-named event to the page.
+
+    Only the fields that change during identification, so the message stays
+    small: the name, where it came from, the agreed position and the tags.
+    """
+    state.publish("event", {
+        "index": event.index,
+        "year": event.year,
+        "proposed_name": event.proposed_name,
+        "rel_dir": event.rel_dir.as_posix(),
+        "name_source": event.name_source,
+        "place_name": event.place_name,
+        "mountain_range": event.mountain_range,
+        "region": event.region,
+        "country": event.country,
+        "activity": event.activity,
+        "lat": event.enriched_lat,
+        "lon": event.enriched_lon,
+        "evidence": list(event.evidence),
+    })
+
+
 def _dedupe_into(state, plan, job) -> None:
     """Fingerprint the plan's photos and mark duplicate groups.
 
@@ -707,6 +769,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if route == "/api/status":
             self._json(200, self.state.status_dict())
             return
+        if route == "/api/events":
+            self._stream_events()
+            return
+
         if route == "/api/estimate":
             self._estimate()
             return
@@ -959,6 +1025,45 @@ class AppHandler(BaseHTTPRequestHandler):
         ok, message = state.start_job("Build plan", work)
         self._json(200 if ok else 409, {"ok": ok, "message": message})
 
+    def _stream_events(self) -> None:
+        """Server-sent events: one line per update, until the client leaves.
+
+        Held open deliberately. ThreadingHTTPServer gives this its own
+        thread, and the heartbeat every 15 seconds keeps proxies and idle
+        timeouts from closing a connection that is simply quiet.
+        """
+        import queue
+
+        channel = self.state.subscribe()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+
+            while True:
+                try:
+                    message = channel.get(timeout=15)
+                except queue.Empty:
+                    # A comment line. Keeps the connection alive without
+                    # pretending anything happened.
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                body = json.dumps(message, default=str)
+                self.wfile.write(f"data: {body}\n\n".encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # the tab was closed or reloaded; entirely normal
+        except OSError as exc:
+            log.debug("Live stream ended: %s", exc)
+        finally:
+            self.state.unsubscribe(channel)
+
     def _estimate(self) -> None:
         """What the next analysis run would actually cost.
 
@@ -1096,6 +1201,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     ),
                     should_cancel=lambda: job.cancelled,
                     duplicate_groups=state.duplicate_groups,
+                    on_event_named=lambda ev: _publish_event(state, ev),
                 )
                 state.set_plan(plan)
                 if stats.better_duplicate_chosen:
@@ -1251,6 +1357,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 on_progress=on_progress,
                 should_cancel=lambda: job.cancelled,
                 duplicate_groups=state.duplicate_groups,
+                on_event_named=lambda ev: _publish_event(state, ev),
             )
             # The plan object was mutated in place; refresh the photo index
             # and the built-at stamp so the UI reloads it.
