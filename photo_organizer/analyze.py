@@ -831,7 +831,13 @@ def preflight(
             "not set. Put GEMINI_API_KEY in a .env file beside the program.",
         ))
     elif check_api:
-        checks.append(_check_api_key(settings.api_key_resolved))
+        key_check = _check_api_key(settings.api_key_resolved)
+        checks.append(key_check)
+        # Listing models is free and works on the free tier, so it proves
+        # only that the key exists. What matters is whether a BATCH JOB can
+        # be created, and that is a different quota entirely.
+        if key_check.ok:
+            checks.append(_check_batch_quota(plan, config, store))
     else:
         checks.append(Check("Gemini API key", True, "present (not verified)",
                             fatal=False))
@@ -853,6 +859,65 @@ def preflight(
             checks.append(Check("Peaks gazetteer", False, str(exc), fatal=False))
 
     return checks
+
+
+def _check_batch_quota(plan: Plan, config: Config, store) -> Check:
+    """Can a batch job actually be created? Submit one photo and find out.
+
+    The only honest way to know. The account quota for creating batch jobs
+    is separate from the one that lets you list models, and a run that
+    discovers the difference does so after encoding the whole library.
+
+    The photo is real and its result is cached like any other, so nothing is
+    wasted. The job is recorded before this returns, so it is collected on
+    the next run rather than orphaned.
+    """
+    from .batch import GeminiBatch
+
+    settings = config.analysis
+    candidate = None
+    for event in plan.events:
+        for photo in select_photos(event, 1):
+            candidate = photo
+            break
+        if candidate is not None:
+            break
+    if candidate is None:
+        return Check("Batch quota", True, "no photo to test with", fatal=False)
+
+    client = GeminiBatch(settings.api_key_resolved, model=settings.model)
+    key = candidate.content_key or ""
+    if not key:
+        from .dedupe import content_hash
+
+        key = content_hash(candidate.source_path, candidate.size_bytes) or ""
+        candidate.content_key = key
+
+    try:
+        jobs = client.submit(
+            [(key, candidate.source_path)], display_name="photo-organizer-preflight"
+        )
+    except Exception as exc:
+        message = str(exc)
+        if "429" in message or "RESOURCE_EXHAUSTED" in message:
+            return Check(
+                "Batch quota", False,
+                "the account cannot create batch jobs: quota exhausted. "
+                "Check billing at https://ai.dev/rate-limit -- listing models "
+                "works on the free tier, creating a batch job does not.",
+            )
+        return Check("Batch quota", False, f"a one-photo batch was refused: {message[:200]}")
+
+    # It worked. Keep the job: one photo already paid for, collected later.
+    for job_name, keys in jobs:
+        try:
+            store.remember_job(job_name, settings.model, keys)
+        except Exception as exc:
+            log.debug("Could not record the preflight job: %s", exc)
+    return Check(
+        "Batch quota", True,
+        f"a one-photo batch was accepted ({jobs[0][0].split('/')[-1]})",
+    )
 
 
 def _check_api_key(api_key: str) -> Check:

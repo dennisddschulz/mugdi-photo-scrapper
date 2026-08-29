@@ -608,3 +608,17 @@ counting cached photos exactly took 150 seconds, so it samples and says so.
 **R-P6** The API key is verified with a real call. "Not set" and "set but
 rejected" are different problems and both must surface before the scan. A
 network failure is a warning, not a blocker.
+
+**R-A21** Batches are capped by request count as well as by bytes. Measured:
+1 request accepted, 5,254 refused with RESOURCE_EXHAUSTED on a billed account
+holding almost no enqueued work.
+
+**R-A22** A 429 must never discard batches already accepted. They are already
+being billed. The run stops cleanly, keeps them, and reports what remains.
+
+**R-A23** API error bodies must not be truncated. A 429 names the quota it hit
+inside `details`, and a 400-character limit cut off exactly that.
+
+**R-P7** The preflight must attempt the REAL operation, not a free proxy for
+it. Listing models succeeds on the free tier and proved nothing; the preflight
+now creates a one-photo batch, which is real work whose result is cached.

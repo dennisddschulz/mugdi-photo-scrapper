@@ -3328,5 +3328,132 @@ class TestBatchChunking(unittest.TestCase):
         total = sum(len(keys) for _n, keys in jobs)
         self.assertLess(total, 50, "cancelling must stop the encode loop")
 
+class TestQuotaHandling(unittest.TestCase):
+    """A 429 must not throw away batches that were already accepted.
+
+    Measured on the real account: one request is accepted, 5,254 in a
+    single job is refused with RESOURCE_EXHAUSTED, while the account is
+    billed and holds almost no enqueued work. So the ceiling is on how much
+    is enqueued at once, and the code has to discover it rather than assume.
+    """
+
+    def setUp(self):
+        import photo_organizer.batch as batch_module
+
+        self.batch = batch_module
+        self._delays = batch_module.RETRY_DELAYS
+        self._max = batch_module.MAX_REQUESTS_PER_BATCH
+        batch_module.RETRY_DELAYS = (0, 0, 0)
+        batch_module.MAX_REQUESTS_PER_BATCH = 5
+        self.addCleanup(setattr, batch_module, "RETRY_DELAYS", self._delays)
+        self.addCleanup(setattr, batch_module,
+                        "MAX_REQUESTS_PER_BATCH", self._max)
+
+    def _client(self):
+        from photo_organizer.batch import GeminiBatch
+
+        client = GeminiBatch("key-not-used")
+        client.encode_image = staticmethod(lambda path, max_edge=1024: "A" * 1000)
+        client._upload_file = lambda path, say: "files/fake"
+        return client
+
+    def _items(self, count):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        items = []
+        for i in range(count):
+            path = root / ("IMG_%03d.jpg" % i)
+            path.write_bytes(b"x")
+            items.append(("h%03d" % i, path))
+        return items
+
+    def test_batches_are_capped_by_request_count(self):
+        """Bytes are not the only limit: a batch far under the size cap was
+        still refused for holding too many requests."""
+        client = self._client()
+        client._create_job = lambda f, d, i: "batches/j%d" % i
+        jobs = client.submit(self._items(23))
+        self.assertEqual(len(jobs), 5)
+        for _name, keys in jobs:
+            self.assertLessEqual(len(keys),
+                                 self.batch.MAX_REQUESTS_PER_BATCH)
+
+    def test_a_429_keeps_the_batches_already_accepted(self):
+        """They are already being billed. Discarding them is the worst
+        possible response to a rate limit."""
+        from photo_organizer.batch import BatchError
+
+        client = self._client()
+        calls = {"n": 0}
+
+        def flaky(file_name, display_name, index):
+            calls["n"] += 1
+            if calls["n"] > 2:
+                raise BatchError("HTTP 429 RESOURCE_EXHAUSTED")
+            return "batches/j%d" % index
+
+        client._create_job = flaky
+        said = []
+        jobs = client.submit(self._items(23), progress=said.append)
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(sum(len(k) for _n, k in jobs), 10)
+        self.assertTrue(any("Quota reached" in m for m in said), said)
+
+    def test_a_429_on_the_very_first_batch_is_raised(self):
+        """Nothing was accepted, so there is nothing to pretend about."""
+        from photo_organizer.batch import BatchError, QuotaExhausted
+
+        client = self._client()
+
+        def always_refuse(file_name, display_name, index):
+            raise BatchError("HTTP 429 RESOURCE_EXHAUSTED")
+
+        client._create_job = always_refuse
+        with self.assertRaises(QuotaExhausted):
+            client.submit(self._items(10))
+
+    def test_a_transient_429_is_retried_and_succeeds(self):
+        from photo_organizer.batch import BatchError
+
+        client = self._client()
+        attempts = {"n": 0}
+
+        def recovers(file_name, display_name, index):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise BatchError("HTTP 429 RESOURCE_EXHAUSTED")
+            return "batches/j%d" % index
+
+        client._create_job = recovers
+        jobs = client.submit(self._items(3))
+        self.assertEqual(len(jobs), 1)
+        self.assertGreaterEqual(attempts["n"], 3, "it must have retried")
+
+    def test_an_error_that_is_not_a_quota_problem_is_not_retried(self):
+        """Retrying a bad request just wastes time and hides the cause."""
+        from photo_organizer.batch import BatchError
+
+        client = self._client()
+        attempts = {"n": 0}
+
+        def bad_request(file_name, display_name, index):
+            attempts["n"] += 1
+            raise BatchError("HTTP 400 malformed request")
+
+        client._create_job = bad_request
+        with self.assertRaises(BatchError):
+            client.submit(self._items(3))
+        self.assertEqual(attempts["n"], 1, "a 400 must not be retried")
+
+    def test_the_full_error_body_is_kept(self):
+        """A 429 names the quota it hit inside its details block, and
+        truncating at 400 characters threw exactly that away."""
+        import inspect
+
+        from photo_organizer.batch import GeminiBatch
+
+        source = inspect.getsource(GeminiBatch._request)
+        self.assertNotIn("[:400]", source)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

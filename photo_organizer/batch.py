@@ -60,6 +60,19 @@ INLINE_MAX_REQUESTS = 12
 UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
 CHUNK_TARGET_BYTES = 1400 * 1024 * 1024
 
+# A batch is capped by REQUEST COUNT as well as by bytes. Measured: one
+# request is accepted, 5,254 in a single job is refused with
+# RESOURCE_EXHAUSTED even though the account is billed and holds almost no
+# enqueued work. The exact ceiling is not documented in the error we saw, so
+# the code starts well under it and halves on refusal rather than assuming.
+MAX_REQUESTS_PER_BATCH = 1000
+
+# How long to wait after a 429 before trying again, and how many times.
+# A quota that resets per minute recovers on its own; one that resets per
+# day does not, and the run then stops cleanly with everything already
+# submitted still in flight.
+RETRY_DELAYS = (20, 60, 180)
+
 # Progress cadence during encoding. It is the slowest stage in the pipeline
 # and it used to report nothing at all until it was finished.
 ENCODE_REPORT_EVERY = 250
@@ -111,6 +124,10 @@ class BatchError(RuntimeError):
     """A batch could not be created, polled or read."""
 
 
+class QuotaExhausted(BatchError):
+    """The account will not accept more enqueued work right now."""
+
+
 class GeminiBatch:
     """Submits photo-analysis requests as one batch job and collects results."""
 
@@ -151,8 +168,14 @@ class GeminiBatch:
                 body = response.read()
                 return body if raw else json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:400]
-            raise BatchError(f"HTTP {exc.code} from {url.split('?')[0]}: {detail}") from None
+            # NOT truncated. A 429 names the exact quota that was hit inside
+            # its "details" block, and cutting the message at 400 characters
+            # threw away the one piece of information needed to act on it.
+            detail = exc.read().decode("utf-8", "replace")
+            log.error("HTTP %s from %s:\n%s", exc.code, url.split("?")[0], detail)
+            raise BatchError(
+                f"HTTP {exc.code} from {url.split('?')[0]}: {detail[:1500]}"
+            ) from None
         except (urllib.error.URLError, TimeoutError) as exc:
             raise BatchError(f"Network failure calling {url.split('?')[0]}: {exc}") from None
 
@@ -257,7 +280,9 @@ class GeminiBatch:
                     f"({len(chunk_keys)} photo(s), {chunk_bytes / 1e6:.0f} MB)"
                 )
                 file_name = self._upload_file(path, say)
-                job_name = self._create_job(file_name, display_name, len(jobs) + 1)
+                job_name = self._create_job_with_retry(
+                    file_name, display_name, len(jobs) + 1, say
+                )
                 jobs.append((job_name, dict(chunk_keys)))
                 say(f"  batch {len(jobs)} submitted: {job_name}")
             finally:
@@ -281,8 +306,13 @@ class GeminiBatch:
                 ) + "\n"
                 blob = line.encode("utf-8")
 
-                # Start a new chunk BEFORE crossing the limit, never after.
-                if chunk_bytes and chunk_bytes + len(blob) > CHUNK_TARGET_BYTES:
+                # Start a new chunk BEFORE crossing either limit, never
+                # after. Request count matters as much as bytes: a batch far
+                # under the size cap was still refused for holding too many
+                # requests.
+                too_big = chunk_bytes + len(blob) > CHUNK_TARGET_BYTES
+                too_many = len(chunk_keys) >= MAX_REQUESTS_PER_BATCH
+                if chunk_bytes and (too_big or too_many):
                     close_and_submit_chunk()
                     open_chunk()
 
@@ -301,6 +331,22 @@ class GeminiBatch:
                         f"chunk {len(jobs) + 1} at {chunk_bytes / 1e6:.0f} MB)"
                     )
             close_and_submit_chunk()
+        except QuotaExhausted as exc:
+            # Stop cleanly and KEEP what was accepted. Previously one refusal
+            # discarded every batch already submitted, along with the work
+            # behind them -- and they were already being billed.
+            if handle is not None:
+                handle.close()
+            if path is not None:
+                path.unlink(missing_ok=True)
+            if not jobs:
+                raise
+            say(
+                f"Quota reached after {len(jobs)} batch(es): {exc}. "
+                f"Keeping them; the remaining photos can be submitted later, "
+                f"and nothing already analysed is paid for twice."
+            )
+            return jobs
         except BaseException:
             if handle is not None:
                 handle.close()
@@ -314,6 +360,30 @@ class GeminiBatch:
             raise BatchError("Nothing could be encoded for submission.")
         say(f"Submitted {len(jobs)} batch job(s) covering {encoded_count} photo(s).")
         return jobs
+
+    def _create_job_with_retry(
+        self, file_name: str, display_name: str, index: int, say
+    ) -> str:
+        """Create a job, waiting out a rate limit rather than failing on it.
+
+        A 429 here means the account will not enqueue more work at this
+        moment. That may clear in a minute or may not clear until tomorrow,
+        so it is retried a few times and then reported honestly rather than
+        retried forever.
+        """
+        last = ""
+        for attempt, delay in enumerate((0,) + RETRY_DELAYS):
+            if delay:
+                say(f"  quota reached; waiting {delay}s before retrying "
+                    f"(attempt {attempt} of {len(RETRY_DELAYS)})")
+                time.sleep(delay)
+            try:
+                return self._create_job(file_name, display_name, index)
+            except BatchError as exc:
+                last = str(exc)
+                if "429" not in last and "RESOURCE_EXHAUSTED" not in last:
+                    raise
+        raise QuotaExhausted(last)
 
     def _create_job(self, file_name: str, display_name: str, index: int) -> str:
         """Create one batch job from an already-uploaded file."""

@@ -583,6 +583,27 @@ full one drops messages rather than blocking, since the plan is reloaded when
 the run finishes anyway. A test publishes 1,000 messages to a listener that
 never reads and asserts it stays fast.
 
+## Quotas
+
+The account limit is not on spending, it is on **how much you enqueue at
+once**. Measured on a billed account that had been charged 10 cents and held
+2 jobs and 3 requests:
+
+| Submitted | Result |
+| --- | --- |
+| 1 request | accepted |
+| 5,254 requests in one job | `HTTP 429 RESOURCE_EXHAUSTED` |
+
+So batches are capped by **request count** (1,000) as well as by bytes, a 429
+is retried with backoff, and — most importantly — **batches already accepted
+are kept**. They are already being billed; discarding them is the worst
+possible response to a rate limit. A run that hits the ceiling stops cleanly,
+keeps what it has, and the rest can be submitted later at no extra cost.
+
+The full error body is now logged. A 429 names the exact quota inside its
+`details` block, and the code used to truncate the message at 400 characters
+— cutting off precisely the part that says which limit was hit.
+
 ## Fail fast
 
 Before any expensive work, a preflight runs in about **two seconds** and
