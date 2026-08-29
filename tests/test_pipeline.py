@@ -2356,5 +2356,39 @@ class TestUiJavaScript(unittest.TestCase):
             "app.html JavaScript does not parse: " + result.stderr)
 
 
+class TestBatchStates(unittest.TestCase):
+    """The live API disagrees with the documentation about state names."""
+
+    def test_the_api_spelling_is_recognised(self):
+        """Measured live: a finished job reports BATCH_STATE_SUCCEEDED.
+
+        The code knew only JOB_STATE_SUCCEEDED, the Vertex spelling, so a
+        completed job never looked terminal. A full run would have polled
+        already-billed results for the full 24-hour ceiling and then
+        reported a timeout.
+        """
+        from photo_organizer.batch import SUCCESS_STATES, TERMINAL_STATES
+
+        self.assertIn("BATCH_STATE_SUCCEEDED", SUCCESS_STATES)
+        self.assertIn("BATCH_STATE_SUCCEEDED", TERMINAL_STATES)
+
+    def test_both_spellings_are_accepted(self):
+        from photo_organizer.batch import SUCCESS_STATES, TERMINAL_STATES
+
+        self.assertIn("JOB_STATE_SUCCEEDED", SUCCESS_STATES)
+        for failure in ("FAILED", "CANCELLED", "EXPIRED"):
+            for prefix in ("JOB_STATE_", "BATCH_STATE_"):
+                self.assertIn(prefix + failure, TERMINAL_STATES)
+                self.assertNotIn(prefix + failure, SUCCESS_STATES)
+
+    def test_a_result_knows_it_succeeded(self):
+        from photo_organizer.batch import BatchResult
+
+        self.assertTrue(BatchResult(state="BATCH_STATE_SUCCEEDED").succeeded)
+        self.assertTrue(BatchResult(state="JOB_STATE_SUCCEEDED").succeeded)
+        self.assertFalse(BatchResult(state="BATCH_STATE_FAILED").succeeded)
+        self.assertFalse(BatchResult(state="BATCH_STATE_PENDING").succeeded)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

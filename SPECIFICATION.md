@@ -351,6 +351,12 @@ intact rather than half-copied.
 the location), `gear_visible` (noisy), `notes` (prose) — remain in the
 database and can be surfaced later without re-analysing anything.
 
+**R-A5b** Batch state names must be matched on **both** spellings. The live
+`generativelanguage` endpoint returns `BATCH_STATE_*`; the documentation and
+Vertex use `JOB_STATE_*`. Verified live 2026-08-29. Not recognising "finished"
+means polling already-billed results until the 24-hour ceiling and reporting a
+timeout.
+
 **R-A7** Indicative cost at batch rates for this library (~13,881 photos,
 ~9,700 after duplicates): **about $2**, once.
 

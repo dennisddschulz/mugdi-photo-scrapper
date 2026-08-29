@@ -636,7 +636,7 @@ def analyze_plan(
     wait_for_batch: bool = True,
 ) -> AnalyzeStats:
     """Analyse the plan's photos and rewrite event names from the results."""
-    from .batch import GeminiBatch, estimate_cost_usd
+    from .batch import SUCCESS_STATES, GeminiBatch, estimate_cost_usd
     from .db import AnalysisStore
     from .dedupe import content_hash
     from .peaks import PeakIndex
@@ -744,8 +744,8 @@ def analyze_plan(
             should_cancel=should_cancel,
         )
         stats.state = state
-        store.update_job(job_name, state, finished=state in ("JOB_STATE_SUCCEEDED",))
-        if state != "JOB_STATE_SUCCEEDED":
+        store.update_job(job_name, state, finished=state in SUCCESS_STATES)
+        if state not in SUCCESS_STATES:
             say(f"Batch ended in state {state}; keeping the job for later collection.")
             return stats
 

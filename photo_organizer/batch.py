@@ -51,11 +51,20 @@ MAX_EDGE = 1024
 INLINE_LIMIT_BYTES = 18 * 1024 * 1024
 INLINE_MAX_REQUESTS = 12
 
-TERMINAL_STATES = {
-    "JOB_STATE_SUCCEEDED",
+# The API returns BATCH_STATE_* on the generativelanguage endpoint, while
+# the documentation and the Vertex flavour use JOB_STATE_*. Measured live:
+# a finished job reports BATCH_STATE_SUCCEEDED. Accept both spellings --
+# failing to recognise "finished" means polling a completed job for 24 hours
+# and then reporting a timeout on work already paid for.
+SUCCESS_STATES = {"JOB_STATE_SUCCEEDED", "BATCH_STATE_SUCCEEDED"}
+
+TERMINAL_STATES = SUCCESS_STATES | {
     "JOB_STATE_FAILED",
     "JOB_STATE_CANCELLED",
     "JOB_STATE_EXPIRED",
+    "BATCH_STATE_FAILED",
+    "BATCH_STATE_CANCELLED",
+    "BATCH_STATE_EXPIRED",
 }
 
 
@@ -73,7 +82,7 @@ class BatchResult:
 
     @property
     def succeeded(self) -> bool:
-        return self.state == "JOB_STATE_SUCCEEDED"
+        return self.state in SUCCESS_STATES
 
     def to_dict(self) -> dict:
         return {
@@ -352,7 +361,7 @@ class GeminiBatch:
         metadata = data.get("metadata") or {}
         state = metadata.get("state") or data.get("state") or "UNKNOWN"
         result = BatchResult(job_name=job_name, state=state)
-        if state != "JOB_STATE_SUCCEEDED":
+        if state not in SUCCESS_STATES:
             return result
 
         dest = metadata.get("output") or metadata.get("response") or {}

@@ -166,6 +166,18 @@ Set a spending limit on the Google billing account — that is the real guard.
 A submitted batch job is recorded in the database so it survives the app
 closing; losing a job name would mean paying twice.
 
+**Verified against the live API** with a two-image job: submit, poll, collect
+and parse all work, and the results match the interactive path exactly.
+Turnaround was **86 seconds**, not the 24 hours the batch API advertises as
+its ceiling.
+
+That test found a bug worth knowing about: the live `generativelanguage`
+endpoint reports **`BATCH_STATE_SUCCEEDED`**, while the documentation and the
+Vertex flavour use `JOB_STATE_SUCCEEDED`. The code knew only the latter, so a
+finished job never looked finished — a full run would have had its results
+completed and billed within minutes, then polled for the full 24-hour ceiling
+and reported a timeout. Both spellings are now accepted.
+
 Terminal equivalents:
 
 ```bash
