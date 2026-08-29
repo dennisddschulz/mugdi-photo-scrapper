@@ -815,6 +815,10 @@ class AppHandler(BaseHTTPRequestHandler):
         step = payload.get("step", "plan")
         state = self.state
 
+        if step == "all":
+            self._run_everything(payload)
+            return
+
         if step == "analyze":
             self._run_analyze()
             return
@@ -919,6 +923,127 @@ class AppHandler(BaseHTTPRequestHandler):
         ok, message = state.start_job("Build plan", work)
         self._json(200 if ok else 409, {"ok": ok, "message": message})
 
+    def _run_everything(self, payload: dict) -> None:
+        """Everything, in one job: plan, duplicates, identify, copy.
+
+        The last two spend money and create files, so this needs the same
+        explicit confirmation the copy button does -- once, for the whole
+        run, from a dialog that has already stated the numbers.
+        """
+        from .analyze import analyze_plan
+        from .copier import copy_plan
+
+        state = self.state
+        if not payload.get("confirm"):
+            self._json(400, {
+                "error": "This run analyses and copies. Confirm first.",
+                "needs_confirmation": True,
+                "images": (state.survey or {}).get("images", 0),
+                "output": str(state.output) if state.output else "",
+            })
+            return
+        if state.source is None or state.output is None:
+            self._json(400, {"error": "choose a source and output folder first"})
+            return
+
+        source, output, config = state.source, state.output, state.config
+
+        def work(job: Job) -> None:
+            job.say(f"Source: {source}   (read-only -- never modified)")
+            job.say(f"Output: {output}")
+            job.total = (state.survey or {}).get("images", 0)
+
+            def on_step(step_id: str, detail: str) -> None:
+                if step_id.endswith("_done"):
+                    job.completed_steps.append(step_id[: -len("_done")])
+                    job.say(f"  {detail}")
+                else:
+                    job.step = step_id
+                    job.detail = detail
+                    job.say(detail)
+
+            def progress(count: int, path) -> None:
+                job.done_count = count
+                job.current = getattr(path, "name", str(path))
+
+            # --- scan, cluster, name, plan -----------------------------
+            plan = build_plan(source, output, config, progress=progress,
+                              on_step=on_step,
+                              should_cancel=lambda: job.cancelled)
+            state.set_plan(plan)
+            job.skipped = len(plan.skipped)
+            job.say(f"  {len(plan.events)} event(s), {plan.photo_count} photo(s)")
+            if job.cancelled:
+                return
+
+            # --- duplicates, so the paid step skips repeats ------------
+            _dedupe_into(state, plan, job)
+            job.completed_steps.append("dupes")
+            if job.cancelled:
+                return
+
+            # --- identify ----------------------------------------------
+            job.step = "analyze"
+            job.done_count = 0
+            job.say("Identifying photos with Gemini (batch, half price)")
+            try:
+                stats = analyze_plan(
+                    plan, config,
+                    on_step=lambda m: (setattr(job, "detail", m), job.say(f"  {m}")),
+                    on_progress=lambda done, total, label: (
+                        setattr(job, "done_count", done),
+                        setattr(job, "total", total or job.total),
+                        setattr(job, "current", label),
+                    ),
+                    should_cancel=lambda: job.cancelled,
+                )
+                state.set_plan(plan)
+                job.say(
+                    f"  {stats.named_from_peak} from a peak, "
+                    f"{stats.named_from_crag} from a crag, "
+                    f"{stats.named_from_region} from region, "
+                    f"{stats.named_from_activity} from activity, "
+                    f"{stats.still_unknown} still unknown"
+                )
+            except Exception as exc:
+                # Do not lose the run over this. Without analysis the folders
+                # are simply named from what is already known, and the photos
+                # still get copied -- which is the part that cannot be redone
+                # cheaply.
+                log.warning("Analysis failed during the full run: %s", exc)
+                job.say(f"  Analysis failed ({exc}).")
+                job.say("  Continuing to copy with the names already known.")
+            job.completed_steps.append("analyze")
+            if job.cancelled:
+                return
+
+            # --- copy ---------------------------------------------------
+            job.step = "copy"
+            job.done_count = 0
+            job.total = plan.photo_count
+            job.say("Copying into the library. Source files are read, never written.")
+            result = copy_plan(
+                plan, config,
+                on_step=lambda m: (setattr(job, "detail", m), job.say(f"  {m}")),
+                on_progress=lambda done, total, name: (
+                    setattr(job, "done_count", done),
+                    setattr(job, "current", name),
+                ),
+                should_cancel=lambda: job.cancelled,
+            )
+            state.copy_stats = result
+            job.completed_steps.append("copy")
+            job.detail = (
+                f"{result.copied} copied, {result.tagged} tagged, "
+                f"{result.duplicates_copied} duplicates set aside, "
+                f"{result.verify_failures} verification failures"
+            )
+            job.say(job.detail)
+            job.say("Done. Your source folder is unchanged.")
+
+        ok, message = state.start_job("Run everything", work)
+        self._json(200 if ok else 409, {"ok": ok, "message": message})
+
     def _run_copy(self, payload: dict) -> None:
         """Copy into the output tree and tag the copies. Requires confirmation."""
         from .copier import copy_plan
@@ -929,7 +1054,10 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         # The one irreversible-ish step in the tool: it creates files. It
         # does not proceed on a stray click.
-        if payload.get("confirm") != "COPY":
+        # One explicit confirmation, not a typed word. The dialog that
+        # produces it states the counts and the destination, which is what
+        # CLAUDE.md actually asks for; typing COPY added annoyance only.
+        if not payload.get("confirm"):
             self._json(
                 400,
                 {

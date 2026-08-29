@@ -801,12 +801,30 @@ class TestWebApp(unittest.TestCase):
         # And nothing was created.
         self.assertFalse(self.output.exists())
 
-    def test_copying_with_a_wrong_confirmation_is_still_refused(self):
+    def test_copying_without_confirmation_is_refused(self):
+        """One explicit confirmation is required -- but not a typed word.
+
+        Typing "COPY" was friction rather than protection: the dialog that
+        produces the confirmation already states the counts and destination,
+        which is what CLAUDE.md asks for. What must stay impossible is
+        copying with no confirmation at all.
+        """
         self._ensure_plan()
-        status, _data = self.json_call(
-            "/api/run", "POST", {"step": "copy", "confirm": "yes"}
-        )
+        for payload in ({"step": "copy"},
+                        {"step": "copy", "confirm": False},
+                        {"step": "copy", "confirm": ""}):
+            with self.subTest(payload=payload):
+                status, data = self.json_call("/api/run", "POST", payload)
+                self.assertEqual(status, 400)
+                self.assertTrue(data.get("needs_confirmation"))
+                self.assertFalse(self.output.exists())
+
+    def test_running_everything_also_needs_confirmation(self):
+        """The chained run ends in a copy, so it needs the same consent."""
+        self._ensure_plan()
+        status, data = self.json_call("/api/run", "POST", {"step": "all"})
         self.assertEqual(status, 400)
+        self.assertTrue(data.get("needs_confirmation"))
         self.assertFalse(self.output.exists())
 
     def test_extra_stages_require_a_plan_first(self):

@@ -233,6 +233,14 @@ select.num { width: auto; font-family: inherit; }
           <button class="btn danger" id="cancelBtn" disabled>Stop</button>
         </div>
         <div style="margin-top:8px">
+          <button class="btn block" id="allBtn">Run everything, including copy</button>
+          <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
+            Scan, cluster, name, duplicates, identify and copy in one pass.
+            Asks once, then runs to the end. <b>Your source folder is never
+            modified</b> — everything is written to the output folder.
+          </div>
+        </div>
+        <div style="margin-top:8px">
           <button class="btn block" id="dupesBtn" disabled>Re-check duplicates</button>
           <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
             Duplicate detection now runs as part of the pipeline — this button
@@ -422,6 +430,45 @@ $("runBtn").onclick = async () => {
   try { await jpost("/api/run", { step: "plan" }); $("logBox").style.display = "block"; startPolling(); }
   catch (e) { toast(e.message, true); }
 };
+$("allBtn").onclick = async () => {
+  const src = $("srcIn").value.trim(), out = $("outIn").value.trim();
+  if (!src || !out) { msg("pathMsg", "Choose a source and an output folder.", "err"); return; }
+  if (src !== STATUS.source || out !== STATUS.output) {
+    try { await jpost("/api/paths", { source: src, output: out }); PLAN = null; edits = {}; }
+    catch (e) { msg("pathMsg", e.message, "err"); return; }
+  }
+  // One dialog, stating what it will do. This is the preview and the
+  // consent in a single step, which is what makes the typed word unnecessary.
+  const st = await jget("/api/status");
+  const n = (st.survey && st.survey.images) || 0;
+  const cost = (n * 0.0002).toFixed(2);
+  if (!confirm(
+    `Run everything on ${n} photo(s)?
+
+` +
+    `  from  ${src}   (read-only, never modified)
+` +
+    `  to    ${out}
+
+` +
+    `This will scan, group, find duplicates, analyse the photos with
+` +
+    `Gemini (roughly $${cost}, billed to your Google account) and then
+` +
+    `copy everything into the output folder.
+
+` +
+    `Your originals are not touched. Duplicates are set aside for review,
+` +
+    `never deleted. To undo: delete the output folder and run again.
+
+` +
+    `Proceed?`)) return;
+  try {
+    await jpost("/api/run", { step: "all", confirm: true });
+    $("logBox").style.display = "block"; startPolling();
+  } catch (e) { toast(e.message, true); }
+};
 $("cancelBtn").onclick = async () => { try { await jpost("/api/cancel"); } catch (e) { toast(e.message, true); } };
 $("enrichBtn").onclick = async () => {
   try { await jpost("/api/run", { step: "enrich" }); $("logBox").style.display = "block"; startPolling(); }
@@ -430,7 +477,8 @@ $("enrichBtn").onclick = async () => {
 $("copyBtn").onclick = async () => {
   const n = PLAN && PLAN.summary ? PLAN.summary.photo_count : 0;
   const where = STATUS.output || "the output folder";
-  // Typed confirmation, not a click-through: this is the step that writes.
+  // One explicit confirmation. The dialog states the counts and the
+  // destination, which is the part that matters; typing a word was friction.
   if (!confirm(`Copy ${n} photo(s) into:
 ${where}
 
@@ -439,7 +487,7 @@ Duplicates are set aside for review; nothing is deleted.
 
 Proceed?`)) return;
   try {
-    await jpost("/api/run", { step: "copy", confirm: "COPY" });
+    await jpost("/api/run", { step: "copy", confirm: true });
     $("logBox").style.display = "block"; startPolling();
   } catch (e) { msg("copyMsg", e.message, "err"); }
 };
@@ -477,6 +525,7 @@ function renderRun() {
   // Only a run in progress disables it. The folders are applied by the
   // click itself, so there is no hidden precondition to discover.
   $("runBtn").disabled = running;
+  $("allBtn").disabled = running;
   $("runBtn").textContent = running ? "Running…" : (STATUS.has_plan ? "Re-run pipeline" : "Run pipeline");
   // Both extra stages need a plan to work on, and cannot share the worker.
   $("enrichBtn").disabled = running || !STATUS.has_plan;

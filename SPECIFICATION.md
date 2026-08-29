@@ -469,6 +469,16 @@ separate action. It writes nothing, so there is nothing to confirm, and
 leaving it optional means paying to analyse every frame of a burst. It stays
 available as a standalone re-run.
 
-**R-P2** Analysis and copying remain separate, explicit actions. Analysis is
-the only step that spends money; copying is the only step that writes files.
-Neither may happen as a side effect of pressing the main run button.
+**R-P2** Analysis and copying are available as separate actions, and are also
+chainable into a single run.
+
+**R-P3** Copying requires **one explicit confirmation**, from a dialog that
+first states the photo count, both folders and the estimated analysis cost.
+That dialog is the preview-then-consent CLAUDE.md requires. A typed magic word
+is NOT required -- it was friction rather than protection. Copying with no
+confirmation at all must remain impossible, and is tested.
+
+**R-P4** A failure in the analysis step must not abort a chained run. The
+folders are then named from what is already known and the photos are still
+copied: copying is the part that cannot be redone cheaply, and analysis
+results are cached anyway.

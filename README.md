@@ -6,7 +6,8 @@ See `SPECIFICATION.md` for the full spec and `CLAUDE.md` for the safety rules.
 
 ## Safety
 
-The source photos are irreplaceable, so the tool is copy-only by construction:
+**Your originals are never touched.** Not by policy — by construction, and the
+15 tests covering it run on every commit:
 
 - Source files are opened in binary read mode. Nothing writes, renames, or
   deletes inside the source tree.
@@ -36,11 +37,17 @@ Copy            verified copy + tags written into the copies
                 separate, and needs typed confirmation
 ```
 
-**Why three buttons and not one.** Duplicate detection is part of the first
-run: it writes nothing, and skipping it means paying to analyse thirty frames
-of one burst to learn what one frame would say. The two that stay separate are
-the two with consequences — Identify spends money, Copy writes files. A single
-"go" button that quietly did both would be a different kind of tool.
+**Or press "Run everything, including copy"** and it does all of the above in
+one pass. It asks once — a dialog stating the photo count, both folders and the
+estimated cost — and then runs to the end.
+
+The separate buttons remain for running a step on its own, or for reviewing
+the proposed names before anything is copied.
+
+There is no typed confirmation. A dialog that states the numbers and waits for
+OK is the explicit consent `CLAUDE.md` asks for; typing a word was friction,
+not protection. What stays impossible is copying with no confirmation at all,
+and a test asserts it.
 
 **Every photo is analysed exactly once in its life.** The result is cached in
 SQLite keyed by the photo's content hash, so a re-scan, a rename, a
