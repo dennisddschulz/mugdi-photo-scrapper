@@ -64,7 +64,9 @@ STEPS = [
         "label": "Duplicates",
         "detail": "Find exact and near-duplicates — marked, never deleted",
         "ready": True,
-        "separate": True,
+        # Part of the main run: it writes nothing, and skipping it means
+        # paying to analyse every frame of a burst.
+        "separate": False,
     },
     {
         "id": "analyze",
@@ -457,6 +459,47 @@ def browse(path_str: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # HTTP handler
 # --------------------------------------------------------------------------
+
+
+def _dedupe_into(state, plan, job) -> None:
+    """Fingerprint the plan's photos and mark duplicate groups.
+
+    Detection only. Nothing is deleted here or anywhere else -- suspected
+    duplicates are copied to _duplicates_review/ at copy time for the user
+    to judge. Shared by the main run and the standalone button, so the two
+    cannot drift apart.
+    """
+    from .dedupe import find_duplicates, mark_duplicates
+
+    photos = list(plan.photos)
+    job.total = len(photos)
+    job.done_count = 0
+    job.step = "dupes"
+    job.say(f"Fingerprinting {len(photos)} photo(s) for duplicates...")
+
+    def progress(done, total) -> None:
+        job.done_count = done
+
+    groups, stats = find_duplicates(
+        photos,
+        workers=state.config.scan.scan_workers,
+        progress=progress,
+        should_cancel=lambda: job.cancelled,
+    )
+    marked = mark_duplicates(groups)
+    state.duplicate_groups = groups
+    state.duplicate_stats = stats
+    state.set_plan(plan)
+    job.detail = (
+        f"{stats.exact_groups} exact group(s) ({stats.exact_duplicates} extra "
+        f"copies), {stats.near_groups} near group(s) "
+        f"({stats.near_duplicates} extra), {marked} photo(s) marked"
+    )
+    job.say(f"  {job.detail}")
+    job.say(
+        "  Marked only. Nothing was deleted, and nothing will be: duplicates "
+        "get copied to _duplicates_review/ for you to judge."
+    )
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -863,6 +906,14 @@ class AppHandler(BaseHTTPRequestHandler):
                     "  No photo has GPS, so every event is named Unknown_DD_MM. "
                     "Place lookup cannot help here; name them yourself below."
                 )
+            # Duplicates are part of the run, not a separate click. This
+            # writes nothing, and skipping it means paying to analyse thirty
+            # frames of one burst to learn what one frame would have said.
+            if not job.cancelled:
+                _dedupe_into(state, plan, job)
+                job.completed_steps.append("dupes")
+                job.step = "dupes"
+
             job.say("Done. Nothing was written -- this is a preview.")
 
         ok, message = state.start_job("Build plan", work)
@@ -922,8 +973,6 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def _run_dupes(self) -> None:
         """Find duplicates across the whole plan. Marks only; deletes nothing."""
-        from .dedupe import find_duplicates, mark_duplicates
-
         state = self.state
         if state.plan is None:
             self._json(400, {"error": "run the pipeline first, then find duplicates"})
@@ -931,34 +980,7 @@ class AppHandler(BaseHTTPRequestHandler):
         plan = state.plan
 
         def work(job: Job) -> None:
-            photos = list(plan.photos)
-            job.total = len(photos)
-            job.step = "dupes"
-            job.say(f"Fingerprinting {len(photos)} photo(s)...")
-
-            def progress(done: int, total: int) -> None:
-                job.done_count = done
-
-            groups, stats = find_duplicates(
-                photos,
-                workers=state.config.scan.scan_workers,
-                progress=progress,
-                should_cancel=lambda: job.cancelled,
-            )
-            marked = mark_duplicates(groups)
-            state.duplicate_groups = groups
-            state.duplicate_stats = stats
-            state.set_plan(plan)
-            job.detail = (
-                f"{stats.exact_groups} exact group(s) ({stats.exact_duplicates} extra "
-                f"copies), {stats.near_groups} near group(s) "
-                f"({stats.near_duplicates} extra), {marked} photo(s) marked"
-            )
-            job.say(job.detail)
-            job.say(
-                "Marked only. Nothing was deleted, and nothing will be: "
-                "duplicates get copied to _duplicates_review/ for you to judge."
-            )
+            _dedupe_into(state, plan, job)
 
         ok, message = state.start_job("Find duplicates", work)
         self._json(200 if ok else 409, {"ok": ok, "message": message})

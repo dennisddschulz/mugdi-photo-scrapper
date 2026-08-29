@@ -26,14 +26,21 @@ Recommended: mark the source drive read-only at the OS level before running.
 ## How it works
 
 ```
-scan → cluster → plan          fast, local, writes nothing
+Run pipeline    scan → cluster → name → plan → duplicates
+                one click, writes nothing, ~5 min for 14k photos
   ↓
-duplicates                     marks exact and near-duplicates
+Identify        Gemini Batch API → SQLite cache
+                separate, because it is the step that spends money
   ↓
-identify                       Gemini Batch API → SQLite cache
-  ↓
-copy                           verified copy + tags written into the copies
+Copy            verified copy + tags written into the copies
+                separate, and needs typed confirmation
 ```
+
+**Why three buttons and not one.** Duplicate detection is part of the first
+run: it writes nothing, and skipping it means paying to analyse thirty frames
+of one burst to learn what one frame would say. The two that stay separate are
+the two with consequences — Identify spends money, Copy writes files. A single
+"go" button that quietly did both would be a different kind of tool.
 
 **Every photo is analysed exactly once in its life.** The result is cached in
 SQLite keyed by the photo's content hash, so a re-scan, a rename, a

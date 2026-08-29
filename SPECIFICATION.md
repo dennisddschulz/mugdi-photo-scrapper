@@ -463,3 +463,12 @@ exist only as code defaults are invisible and look lost.
 
 **R-U6** The control panel sends `Cache-Control: no-store`. It reflects live
 state, and a cached copy showed stale values that looked like lost settings.
+
+**R-P1** Duplicate detection runs as part of the main pipeline, not as a
+separate action. It writes nothing, so there is nothing to confirm, and
+leaving it optional means paying to analyse every frame of a burst. It stays
+available as a standalone re-run.
+
+**R-P2** Analysis and copying remain separate, explicit actions. Analysis is
+the only step that spends money; copying is the only step that writes files.
+Neither may happen as a side effect of pressing the main run button.
