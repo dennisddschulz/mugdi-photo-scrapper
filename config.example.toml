@@ -12,8 +12,9 @@ default_output = 'C:\FotosTempOrganized'
 [cluster]
 # Start a new event after this many hours without a photo.
 time_gap_hours = 12.0
-# Start a new event after a location jump larger than this.
-distance_km = 50.0
+# Start a new event after a location jump larger than this. 15 km keeps
+# two crags in one valley apart; 50 km merged them.
+distance_km = 15.0
 # A distance split also needs at least this much elapsed time, so one bad
 # GPS fix in the middle of a hike does not shatter the event.
 min_gap_minutes_for_distance_split = 20.0

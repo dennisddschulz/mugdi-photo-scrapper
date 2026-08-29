@@ -193,7 +193,7 @@ class TestClustering(unittest.TestCase):
         would quietly re-cluster the whole library on the next run."""
         defaults = ClusterConfig()
         self.assertEqual(defaults.time_gap_hours, 12.0)
-        self.assertEqual(defaults.distance_km, 50.0)
+        self.assertEqual(defaults.distance_km, 15.0)
 
     def test_twelve_hour_default_keeps_a_long_day_together(self):
         # Morning walk and evening photos on the same day, 9h apart and in

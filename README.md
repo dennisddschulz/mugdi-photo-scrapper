@@ -294,7 +294,7 @@ not a typical one. `"Plaisir Ost"` at 644 ms is that case.
 
 Photos are sorted by timestamp. A new event starts after a gap of
 `time_gap_hours` (default 12), or a position jump over `distance_km`
-(default 50) *with* enough elapsed time to make the jump plausible — that
+(default 15) *with* enough elapsed time to make the jump plausible — that
 second condition stops one bad GPS fix mid-hike splitting an event.
 
 A name is assembled as `[range_]place_activity_DD_MM`, for example

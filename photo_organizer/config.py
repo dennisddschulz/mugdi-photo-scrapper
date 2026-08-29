@@ -77,8 +77,13 @@ class ClusterConfig:
 
     # Start a new event when the gap to the previous photo exceeds this.
     time_gap_hours: float = 12.0
-    # ...or when the jump from the last known GPS fix exceeds this.
-    distance_km: float = 50.0
+    # ...or when the jump from the last known GPS fix exceeds this. 15 km is
+    # tight enough to separate two crags in the same valley, which 50 km
+    # merged into one event. It only fires on photos that HAVE a fix, and
+    # this library has 41 of 13,881 -- so on the phone dump the time gap
+    # does nearly all the work, and this matters for cameras that record
+    # position.
+    distance_km: float = 15.0
     # Ignore GPS-based splits when photos are close in time anyway; a single
     # bad fix in the middle of a hike should not shatter the event.
     min_gap_minutes_for_distance_split: float = 20.0
