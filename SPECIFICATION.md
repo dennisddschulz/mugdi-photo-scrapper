@@ -675,3 +675,20 @@ leftover files and 46.7 GB.
 for a clean run. Those files are copies, but they are still photographs.
 Clearing the output is the user's decision -- it is their recovery story, and
 the tool's job is to say when it matters, not to act.
+
+**R-S8** A run STARTS FROM AN EMPTY OUTPUT. The pipeline clears the output
+tree once, before planning, so a re-run cannot leave the previous run's
+folders standing beside the new ones -- that is how a stale
+`Mont-Blanc-Massif_alpine-climbing_11_09` survived a run that had already
+learned to read the topo and name it Aiguille Dibona.
+
+Clearing refuses any folder it does not recognise as its own output: one
+carrying the `.photo-organizer-output` marker, or one whose every top-level
+entry is a year folder or a review folder. A folder holding anything else is
+left completely untouched and the run stops. `check_paths` is re-run inside
+the clear rather than trusted from the caller, so no caller can talk it into
+deleting inside the read-only source.
+
+Clearing happens when a RUN starts, never inside `copy_plan`, so an
+interrupted 50 GB copy stays resumable and re-running still skips what is
+already there (R-S9).

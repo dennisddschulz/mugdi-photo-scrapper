@@ -3844,5 +3844,79 @@ class TestPageDetection(unittest.TestCase):
 
         self.assertIn("hours", unavailable_reason())
 
+class TestClearingTheOutput(unittest.TestCase):
+    """Re-runs must not leave the previous run standing next to the new one.
+
+    Deleting is the one thing this project is careful about, so the test
+    that matters most here is the one where it REFUSES."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.source = self.root / "src"
+        self.output = self.root / "out"
+        self.source.mkdir()
+        (self.source / "keep.jpg").write_bytes(b"original")
+        self.output.mkdir()
+
+    def test_it_clears_a_tree_that_looks_like_ours(self):
+        from photo_organizer.copier import clear_output
+
+        (self.output / "2025").mkdir()
+        (self.output / "2025" / "a.jpg").write_bytes(b"copy")
+        (self.output / "_duplicates_review").mkdir()
+        removed, _ = clear_output(self.output, self.source)
+        self.assertEqual(removed, 1)
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_it_refuses_a_folder_holding_anything_else(self):
+        """The whole point. A folder with someone's own files is not ours
+        to empty, and a wrong guess here is unrecoverable."""
+        from photo_organizer.copier import OutputNotOurs, clear_output
+
+        (self.output / "2025").mkdir()
+        (self.output / "tax-returns").mkdir()
+        (self.output / "tax-returns" / "2024.pdf").write_bytes(b"mine")
+        with self.assertRaises(OutputNotOurs):
+            clear_output(self.output, self.source)
+        self.assertTrue((self.output / "tax-returns" / "2024.pdf").exists(),
+                        "it must not delete anything when it refuses")
+
+    def test_the_marker_makes_a_tree_ours(self):
+        from photo_organizer.copier import clear_output, mark_output
+
+        mark_output(self.output)
+        (self.output / "odd-name").mkdir()
+        clear_output(self.output, self.source)
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_it_never_touches_the_source(self):
+        from photo_organizer.copier import clear_output
+
+        (self.output / "2025").mkdir()
+        clear_output(self.output, self.source)
+        self.assertEqual((self.source / "keep.jpg").read_bytes(), b"original")
+
+    def test_it_refuses_when_the_output_is_inside_the_source(self):
+        """check_paths is re-run here rather than trusted, so a caller
+        cannot talk it into deleting inside the read-only source."""
+        from photo_organizer.copier import clear_output
+        from photo_organizer.scan import UnsafePathError
+
+        inside = self.source / "organized"
+        inside.mkdir()
+        with self.assertRaises(UnsafePathError):
+            clear_output(inside, self.source)
+        self.assertTrue(inside.exists())
+
+    def test_a_dry_run_counts_without_deleting(self):
+        from photo_organizer.copier import clear_output
+
+        (self.output / "2025").mkdir()
+        (self.output / "2025" / "a.jpg").write_bytes(b"12345")
+        removed, freed = clear_output(self.output, self.source, dry_run=True)
+        self.assertEqual((removed, freed), (1, 5))
+        self.assertTrue((self.output / "2025" / "a.jpg").exists())
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

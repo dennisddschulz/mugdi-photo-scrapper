@@ -613,3 +613,20 @@ python -m unittest discover -s tests -v
 
 digiKam takes over afterwards for face recognition, duplicate confirmation,
 tag editing and browsing. This tool feeds it; it does not replace it.
+
+### Re-running
+
+A run empties the output folder first, so what you end up with is only ever
+the result of the latest run. Without this, a re-run wrote its new folders
+next to the old ones and the stale names survived -- which is exactly how a
+`Mont-Blanc-Massif` folder outlived the fix that renames it Aiguille Dibona.
+
+It will only empty a folder it recognises as its own: one it has written
+before (marked with `.photo-organizer-output`), or one containing nothing
+but year folders and review folders. Point it at a folder holding anything
+else and it stops without deleting a single file. The source is never
+touched by any of this.
+
+An interrupted copy is still resumable: clearing happens once when a run
+starts, not on every copy, so re-running a half-finished copy skips the
+files already written instead of starting the 50 GB again.

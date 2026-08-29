@@ -1178,6 +1178,24 @@ class AppHandler(BaseHTTPRequestHandler):
             job.say(f"Output: {output}")
             job.total = (state.survey or {}).get("images", 0)
 
+            # A run starts from an empty output. Otherwise the previous
+            # run's folders stand next to the new ones and stale names
+            # survive a run that has already learned better. Refuses any
+            # folder it does not recognise as ours; the source is never
+            # touched. Once here, not in copy_plan, so an interrupted
+            # copy stays resumable.
+            from .copier import OutputNotOurs, clear_output, mark_output
+
+            try:
+                removed, freed = clear_output(output, source)
+                if removed:
+                    job.say(f"Cleared {removed} file(s) from a previous run "
+                            f"({freed / 1e9:.1f} GB freed)")
+            except OutputNotOurs as exc:
+                job.say(str(exc))
+                raise
+            mark_output(output)
+
             def on_step(step_id: str, detail: str) -> None:
                 if step_id.endswith("_done"):
                     job.completed_steps.append(step_id[: -len("_done")])

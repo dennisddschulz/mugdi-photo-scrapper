@@ -35,6 +35,110 @@ DUPLICATE_SUFFIX = "_duplicate"
 # pocket shot. Set aside for a look, exactly like duplicates, and
 # deleted never.
 REJECTED_DIR = "_rejected_review"
+
+# Dropped at the root of every output tree we create, so a later run can
+# recognise its own work and clear it without guessing.
+OUTPUT_MARKER = ".photo-organizer-output"
+
+# Top-level entries a run of ours legitimately leaves behind. Anything else
+# means the folder holds something we did not put there.
+_ALLOWED_TOP_LEVEL = {
+    OUTPUT_MARKER, DUPLICATES_DIR, REJECTED_DIR,
+    "manifest.json", "names.toml", "edits.toml",
+    "desktop.ini", "thumbs.db", ".ds_store",
+}
+
+
+class OutputNotOurs(Exception):
+    """The output folder holds files this tool did not write."""
+
+
+def _is_year_dir(entry: Path) -> bool:
+    return entry.is_dir() and len(entry.name) == 4 and entry.name.isdigit()
+
+
+def unrecognised_entries(output: Path) -> list[str]:
+    """Top-level things in the output that a run of ours would not create."""
+    if not output.exists():
+        return []
+    strange = []
+    for entry in sorted(output.iterdir()):
+        if _is_year_dir(entry) or entry.name.lower() in _ALLOWED_TOP_LEVEL:
+            continue
+        strange.append(entry.name)
+    return strange
+
+
+def mark_output(output: Path) -> None:
+    """Record that this tree is ours, so a later run may clear it."""
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        (output / OUTPUT_MARKER).write_text(
+            "Written by photo_organizer. This folder is disposable: deleting "
+            "it and re-running rebuilds it from the read-only source.\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        log.debug("Could not write the output marker: %s", exc)
+
+
+def clear_output(
+    output: Path,
+    source: Path,
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """Empty the output tree before a fresh run. Returns (files, bytes).
+
+    Refuses unless the folder is demonstrably ours: either it carries our
+    marker, or every top-level entry is one a run of ours creates (a year
+    folder, or one of the review folders). A folder holding anything else is
+    left completely alone -- better a confusing extra folder than deleting
+    someone's photos.
+
+    The source is never touched, and check_paths is re-run here rather than
+    trusted from the caller.
+    """
+    import shutil
+
+    from .scan import check_paths
+
+    source, output = check_paths(source, output)
+    if not output.exists():
+        return 0, 0
+
+    strange = unrecognised_entries(output)
+    if strange and not (output / OUTPUT_MARKER).exists():
+        raise OutputNotOurs(
+            f"{output} holds {len(strange)} item(s) this tool did not write "
+            f"({', '.join(strange[:5])}"
+            + (", ..." if len(strange) > 5 else "")
+            + "). Nothing was deleted. Point the output somewhere else, or "
+            "empty that folder yourself if you are sure."
+        )
+
+    files = 0
+    total = 0
+    for entry in output.rglob("*"):
+        if entry.is_file():
+            files += 1
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                pass
+    if dry_run:
+        return files, total
+
+    for entry in sorted(output.iterdir()):
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        except OSError as exc:
+            log.warning("Could not remove %s: %s", entry, exc)
+    log.info("Cleared %s: %d file(s) removed", output, files)
+    return files, total
+
 VERIFY_CHUNK = 1024 * 1024
 
 
@@ -122,6 +226,10 @@ def copy_plan(
     store=None,
     write_metadata: bool = True,
     deep_verify: bool = True,
+    # Off by default so an interrupted copy stays resumable: re-running
+    # skips what is already there rather than starting the 50 GB again.
+    # Clearing belongs to STARTING a run, and the pipeline does it once.
+    clear_first: bool = False,
     on_step: Optional[Callable[[str], None]] = None,
     on_progress: Optional[Callable[[int, int, str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
@@ -150,6 +258,21 @@ def copy_plan(
     from .scan import check_paths
 
     source_root, output_root = check_paths(source_root, output_root)
+
+    # Start from an empty output, so a re-run cannot leave the previous
+    # run's folders standing next to the new ones. That is how a stale
+    # Mont-Blanc-Massif survived a run that had already learned better.
+    # Refuses anything it does not recognise as our own output.
+    if clear_first:
+        try:
+            removed, freed = clear_output(output_root, source_root)
+            if removed:
+                say(f"Cleared {removed} file(s) from a previous run "
+                    f"({freed / 1e9:.1f} GB). The source is untouched.")
+        except OutputNotOurs as exc:
+            say(str(exc))
+            raise
+    mark_output(output_root)
 
     tagging = write_metadata and meta.available()
     if write_metadata and not tagging:
