@@ -27,6 +27,10 @@ from .models import Photo, Plan
 log = logging.getLogger(__name__)
 
 DUPLICATES_DIR = "_duplicates_review"
+# Frames judged empty -- all black, all white, or an accidental
+# pocket shot. Set aside for a look, exactly like duplicates, and
+# deleted never.
+REJECTED_DIR = "_rejected_review"
 VERIFY_CHUNK = 1024 * 1024
 
 
@@ -40,6 +44,7 @@ class CopyStats:
     copied: int = 0
     skipped_existing: int = 0
     duplicates_copied: int = 0
+    rejected_copied: int = 0
     verify_failures: int = 0
     errors: list[str] = field(default_factory=list)
     bytes_copied: int = 0
@@ -177,6 +182,10 @@ def copy_plan(
             if on_progress:
                 on_progress(done, total, photo.source_path.name)
 
+            reason = getattr(photo, "reject_reason", None)
+            if reason:
+                _copy_rejected(photo, output_root, stats, deep_verify, reason)
+                continue
             role = getattr(photo, "duplicate_role", None)
             if role in ("exact", "near"):
                 _copy_duplicate(photo, output_root, stats, deep_verify)
@@ -250,6 +259,33 @@ def _copy_one(photo: Photo, target: Path, stats: CopyStats, deep: bool) -> bool:
     stats.copied += 1
     stats.bytes_copied += photo.size_bytes or 0
     return True
+
+
+def _copy_rejected(
+    photo: Photo, output_root: Path, stats: CopyStats, deep: bool, reason: str
+) -> None:
+    """Set an empty frame aside where it can be looked at.
+
+    Grouped by why it was rejected, so a wrong call is easy to spot and
+    easy to undo -- the file is right there. Nothing is deleted.
+    """
+    folder = output_root / REJECTED_DIR / reason
+    folder.mkdir(parents=True, exist_ok=True)
+    target = unique_target(folder, photo.source_path.name)
+    try:
+        shutil.copy2(photo.source_path, target)
+    except OSError as exc:
+        stats.errors.append(f"{photo.source_path.name}: {exc}")
+        return
+    if verify_copy(photo.source_path, target, deep=deep):
+        stats.rejected_copied += 1
+        stats.bytes_copied += photo.size_bytes or 0
+    else:
+        stats.verify_failures += 1
+        try:
+            target.unlink()
+        except OSError:
+            pass
 
 
 def _copy_duplicate(

@@ -243,9 +243,11 @@ select.num { width: auto; font-family: inherit; }
         <div style="margin-top:8px">
           <button class="btn block" id="dupesBtn" disabled>Re-check duplicates</button>
           <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
-            Duplicate detection now runs as part of the pipeline — this button
-            only re-runs it on its own. Marks exact and near-duplicates;
-            <b>never deletes anything.</b>
+            Runs as part of the pipeline — this button only re-runs it alone.
+            Marks exact and near-duplicates, and frames that are all black,
+            all white or blank. <b>Never deletes anything</b>: they are copied
+            to <code>_duplicates_review/</code> and <code>_rejected_review/</code>
+            for you to judge.
           </div>
           <div class="msg" id="dupeMsg"></div>
         </div>

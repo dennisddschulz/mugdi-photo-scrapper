@@ -211,12 +211,15 @@ def find_duplicates(
     near: bool = True,
     progress: Optional[Callable[[int, int], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    blank_check: bool = True,
 ) -> tuple[list[DuplicateGroup], DedupeStats]:
     """Group photos into exact and near-duplicate sets.
 
     Returns (groups, stats). Photos not in any group are unique. Nothing is
     modified on disk and nothing is deleted.
     """
+    from .blanks import inspect as inspect_frame
+
     stats = DedupeStats(scanned=len(photos))
     if not photos:
         return [], stats
@@ -248,6 +251,12 @@ def find_duplicates(
                 return photo, None, None
         key = digest.hexdigest()
         photo.content_key = key
+        # Free: the EXIF thumbnail is already inside `head`, read for the
+        # hash. Flat frames are set aside now so the paid analysis skips them.
+        if blank_check:
+            frame = inspect_frame(photo.source_path, head=head)
+            if frame is not None and frame.is_empty:
+                photo.reject_reason = frame.reason
         return (
             photo,
             key,

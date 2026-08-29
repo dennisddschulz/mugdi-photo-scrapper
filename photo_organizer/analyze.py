@@ -153,6 +153,11 @@ class AnalyzeStats:
     # Summits taken straight from text in the frame rather than recognition.
     peaks_from_text: int = 0
     personal_documents: int = 0
+    # Frames set aside as empty: flat ones caught before analysis,
+    # pocket shots caught by it. Copied to _rejected_review/, never
+    # deleted.
+    empty_frames: int = 0
+    pocket_shots: int = 0
     named_from_peak: int = 0
     named_from_crag: int = 0
     named_from_region: int = 0
@@ -181,6 +186,7 @@ def select_photos(
     usable = [
         p for p in event.photos
         if getattr(p, "duplicate_role", None) in (None, "keep")
+        and getattr(p, "reject_reason", None) is None
     ] or event.photos
     if not usable:
         return []
@@ -626,6 +632,39 @@ def apply_to_event(
     return "none"
 
 
+def looks_like_a_pocket_shot(a: PhotoAnalysis) -> bool:
+    """Is this a frame the camera took by accident?
+
+    Judged from the model's reading, not from pixels. Pixel statistics were
+    tried and abandoned: on 1,500 real photos a "dark and low-detail" rule
+    flagged eleven frames of which TEN were photographs -- a night food
+    truck, a campfire, a snowy road at dusk, a climb inside a cave. A pocket
+    shot and a night photograph have the same statistics.
+
+    Every condition must hold, and any sign of content rescues the frame.
+    The cost of being wrong here is asymmetric: a missed pocket shot is a
+    file in a folder, a wrong rejection is a photograph the user has to go
+    looking for.
+    """
+    if a is None:
+        return False
+    # Anything the model could actually name is a photograph.
+    if a.peak_name or a.crag_name or a.verified_peak or a.landmarks:
+        return False
+    if a.place_names_visible or a.visible_text or a.caption and len(a.caption) > 60:
+        return False
+    if a.people_count:
+        return False
+    if a.activity not in ("none", "unknown"):
+        return False
+    if a.scene not in ("other", "unknown"):
+        return False
+    return (
+        a.sharpness == "blurry"
+        and (a.aesthetic_score is not None and a.aesthetic_score <= 1)
+    )
+
+
 def pending_cost(
     plan: Plan, config: Config, store=None
 ) -> dict:
@@ -832,6 +871,15 @@ def analyze_plan(
                 found.append(analysis)
         # A name written in the frame outranks one recognised from the
         # terrain, so resolve those first and drop anything they contradict.
+        # Frames the model saw nothing in. Marking only; the copier sets
+        # them aside and the user decides.
+        for photo in select_photos(event, settings.photos_per_event):
+            key = photo.content_key
+            analysis = known.get(key) if key else None
+            if analysis is not None and looks_like_a_pocket_shot(analysis):
+                photo.reject_reason = "pocket"
+                stats.pocket_shots += 1
+
         promoted = promote_text_anchors(found, peak_index, settings.peak_countries)
         if promoted:
             stats.peaks_from_text += promoted
@@ -886,6 +934,7 @@ def analyze_plan(
         f"Named: peak={stats.named_from_peak} crag={stats.named_from_crag} "
         f"region={stats.named_from_region} activity={stats.named_from_activity} "
         f"from-text={stats.peaks_from_text} "
+        f"pocket-shots={stats.pocket_shots} "
         f"contradicted={stats.peaks_contradicted} "
         f"unknown={stats.still_unknown}"
     )

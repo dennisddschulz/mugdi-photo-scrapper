@@ -17,8 +17,9 @@ See `SPECIFICATION.md` for the full spec and `CLAUDE.md` for the safety rules.
 - Every copy is verified against the original by full content hash before it
   counts as done. A copy that fails verification is removed, not kept.
 - Existing files are never overwritten; a name collision gets a suffix.
-- Suspected duplicates are **copied** to `_duplicates_review/`. Nothing is
-  ever deleted — not duplicates, not originals, not anything.
+- Suspected duplicates are **copied** to `_duplicates_review/`, and frames
+  judged empty to `_rejected_review/`. Nothing is ever deleted — not
+  duplicates, not empty frames, not originals, not anything.
 - Copying requires explicit confirmation and never happens by default.
 - Recovery from any failure is always "delete the output folder and re-run".
 
@@ -324,6 +325,41 @@ faster here.** What was slow was missing indexes, and every fix is one:
 One caveat on the numbers: the fixture gives every photo the same caption and
 notes, so a common-word text search matches all 400,000 rows — a worst case,
 not a typical one. `"Plaisir Ost"` at 644 ms is that case.
+
+## Empty frames: pocket shots, black, white
+
+Two detectors, because one is not enough and neither was guessed.
+
+**Before analysis**, pixel statistics catch frames that are genuinely flat —
+all black, all white, uniform grey. Measured on 1,500 photos from this
+library: **2 flagged, both actually blank, no photograph touched.** They cost
+nothing to find (the thumbnail is already in memory from the duplicate pass)
+and they are skipped by the paid analysis.
+
+**After analysis**, the model's own reading catches pocket shots — blurry,
+lowest rating, no activity, no scene, nothing legible, nobody in frame. Any
+one of those failing rescues the photo.
+
+**There is no pixel rule for pocket shots, and that is a measurement, not an
+omission.** The first attempt flagged dark low-detail frames. Checked against
+the real library it caught eleven, of which **ten were photographs**:
+
+| Flagged | What it actually was |
+| --- | --- |
+| `IMG_20200927_210401` | a food truck at night |
+| `IMG_20200928_213712` | a campfire |
+| `IMG_20191207_161143` | a snowy road at dusk |
+| `IMG_20210127_121231` | a climb inside a cave |
+| `IMG_20210418_200100` | someone eating cake |
+
+A pocket shot and a night photograph have the same brightness, spread and
+edge energy. No threshold separates them, so the rule was removed rather than
+tuned, and a test pins the lesson.
+
+**Nothing is deleted.** Rejected frames are copied to `_rejected_review/`,
+sorted by reason, so a wrong call is visible and trivially undone. Verified
+end to end: a black and a white frame set aside, the real photo filed, the
+source untouched.
 
 ## How events are decided
 

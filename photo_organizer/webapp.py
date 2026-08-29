@@ -490,15 +490,23 @@ def _dedupe_into(state, plan, job) -> None:
     state.duplicate_groups = groups
     state.duplicate_stats = stats
     state.set_plan(plan)
+    empty = sum(1 for p in photos if getattr(p, "reject_reason", None))
     job.detail = (
         f"{stats.exact_groups} exact group(s) ({stats.exact_duplicates} extra "
         f"copies), {stats.near_groups} near group(s) "
         f"({stats.near_duplicates} extra), {marked} photo(s) marked"
+        + (f", {empty} empty frame(s)" if empty else "")
     )
     job.say(f"  {job.detail}")
+    if empty:
+        job.say(
+            f"  {empty} frame(s) look empty (all black, all white or blank). "
+            "They will go to _rejected_review/ and are skipped by the paid "
+            "analysis."
+        )
     job.say(
         "  Marked only. Nothing was deleted, and nothing will be: duplicates "
-        "get copied to _duplicates_review/ for you to judge."
+        "and empty frames are copied aside for you to judge."
     )
 
 

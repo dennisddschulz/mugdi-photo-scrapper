@@ -2485,5 +2485,110 @@ class TestPendingCost(unittest.TestCase):
                 "the duplicate pass and the cache must agree on the key")
 
 
+class TestEmptyFrames(unittest.TestCase):
+    """Frames with nothing in them -- and, more importantly, the ones that
+    look empty to a statistic but are photographs."""
+
+    def _stats(self, colour, size=(64, 48), noise=False):
+        from PIL import Image
+
+        from photo_organizer.blanks import classify, _measure
+
+        img = Image.new("RGB", size, colour)
+        if noise:
+            import random as _random
+
+            _random.seed(1)
+            img.putdata([(_random.randint(0, 90),) * 3 for _ in range(size[0] * size[1])])
+        return classify(_measure(img))
+
+    def test_pure_black_is_empty(self):
+        stats = self._stats((0, 0, 0))
+        self.assertTrue(stats.is_empty)
+        self.assertEqual(stats.reason, "black")
+
+    def test_pure_white_is_empty(self):
+        stats = self._stats((255, 255, 255))
+        self.assertTrue(stats.is_empty)
+        self.assertEqual(stats.reason, "white")
+
+    def test_a_uniform_grey_is_empty(self):
+        stats = self._stats((128, 128, 128))
+        self.assertTrue(stats.is_empty)
+        self.assertEqual(stats.reason, "blank")
+
+    def test_a_dark_but_varied_frame_is_a_photograph(self):
+        """The lesson from the real library, pinned so it cannot regress.
+
+        A first attempt flagged dark low-detail frames as pocket shots. On
+        1,500 real photos it caught eleven, of which TEN were photographs:
+        a night food truck, a campfire, a snowy road at dusk, a climb in a
+        cave. Dark plus grainy is a night photograph, not an accident.
+        """
+        stats = self._stats((0, 0, 0), noise=True)
+        self.assertFalse(
+            stats.is_empty,
+            f"a dark, grainy frame must not be called empty: {stats.describe()}")
+
+    def test_there_is_no_noise_rule(self):
+        from photo_organizer import blanks
+
+        self.assertNotIn("noise", blanks.REASONS)
+        self.assertFalse(hasattr(blanks, "NOISE_MAX_MEAN"))
+
+
+class TestPocketShots(unittest.TestCase):
+    """Caught from what the model saw, not from pixel statistics."""
+
+    def _a(self, **kw):
+        from photo_organizer.schema import PhotoAnalysis
+
+        base = dict(sharpness="blurry", aesthetic_score=1, scene="unknown",
+                    activity="unknown")
+        base.update(kw)
+        return PhotoAnalysis(**base)
+
+    def test_a_blurry_empty_frame_is_a_pocket_shot(self):
+        from photo_organizer.analyze import looks_like_a_pocket_shot
+
+        self.assertTrue(looks_like_a_pocket_shot(self._a()))
+
+    def test_anything_the_model_could_name_is_kept(self):
+        from photo_organizer.analyze import looks_like_a_pocket_shot
+
+        for rescue in (
+            {"peak_name": "Eiger"},
+            {"crag_name": "Handegg"},
+            {"landmarks": ["Bergseehuette"]},
+            {"visible_text": "DIE POST"},
+            {"place_names_visible": ["Furka"]},
+            {"people_count": 2},
+            {"activity": "ice_climbing"},
+            {"scene": "mountain_landscape"},
+        ):
+            with self.subTest(rescue=rescue):
+                self.assertFalse(looks_like_a_pocket_shot(self._a(**rescue)))
+
+    def test_a_sharp_frame_is_never_a_pocket_shot(self):
+        from photo_organizer.analyze import looks_like_a_pocket_shot
+
+        self.assertFalse(looks_like_a_pocket_shot(self._a(sharpness="sharp")))
+
+    def test_a_frame_worth_looking_at_is_never_a_pocket_shot(self):
+        from photo_organizer.analyze import looks_like_a_pocket_shot
+
+        self.assertFalse(looks_like_a_pocket_shot(self._a(aesthetic_score=3)))
+
+    def test_rejected_frames_are_not_sent_for_analysis(self):
+        """They are worthless, so they must not be paid for."""
+        from photo_organizer.analyze import select_photos
+
+        event = Event(index=1, photos=[make_photo(f"{i}.jpg") for i in range(4)])
+        list(event.photos)[0].reject_reason = "black"
+        chosen = select_photos(event, 0)
+        self.assertEqual(len(chosen), 3)
+        self.assertTrue(all(p.reject_reason is None for p in chosen))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

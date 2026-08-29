@@ -492,3 +492,20 @@ something that is free.
 photo, and the analysis stage reuses it. The two must compute the SAME key --
 if they ever diverge every photo is paid for twice, and a test asserts they
 agree. This also removes a second full read of every file.
+
+**R-F13** Frames with no content are detected and set aside, never deleted.
+Two detectors: pixel statistics before analysis for genuinely flat frames
+(all black, all white, uniform), and the model's own reading after analysis
+for pocket shots.
+
+**R-F14** There must be NO pixel-statistics rule for pocket shots. Measured
+on 1,500 photos from the real library, a "dark and low-detail" rule flagged
+eleven frames of which ten were photographs (a night food truck, a campfire,
+a snowy road at dusk, a climb in a cave). A pocket shot and a night
+photograph have the same statistics; the thresholds that catch one delete the
+other. A test asserts a dark grainy frame is not called empty.
+
+**R-F15** Rejected frames are copied to `_rejected_review/<reason>/` and
+excluded from the paid analysis. Detection is asymmetric by design: a missed
+pocket shot is one file in a folder, a wrong rejection is a photograph the
+user has to go looking for.
