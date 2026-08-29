@@ -1039,18 +1039,45 @@ class AppHandler(BaseHTTPRequestHandler):
                 job.current = getattr(path, "name", str(path))
 
             # --- scan, cluster, name, plan -----------------------------
-            plan = build_plan(source, output, config, progress=progress,
-                              on_step=on_step,
-                              should_cancel=lambda: job.cancelled)
-            state.set_plan(plan)
-            job.skipped = len(plan.skipped)
-            job.say(f"  {len(plan.events)} event(s), {plan.photo_count} photo(s)")
+            # Reuse a plan already built for these same folders. Re-reading
+            # 14,000 files to rediscover what is already in memory wastes
+            # minutes and tells us nothing new.
+            reusable = (
+                state.plan is not None
+                and state.source == source
+                and state.output == output
+            )
+            if reusable:
+                plan = state.plan
+                job.say(
+                    f"Reusing the plan already built for these folders: "
+                    f"{len(plan.events)} event(s), {plan.photo_count} photo(s)."
+                )
+                job.say("  (Use 'Preview only' to rebuild it from scratch.)")
+                for done_step in ("scan", "cluster", "name", "plan"):
+                    job.completed_steps.append(done_step)
+            else:
+                plan = build_plan(source, output, config, progress=progress,
+                                  on_step=on_step,
+                                  should_cancel=lambda: job.cancelled)
+                state.set_plan(plan)
+                job.skipped = len(plan.skipped)
+                job.say(f"  {len(plan.events)} event(s), {plan.photo_count} photo(s)")
             if job.cancelled:
                 return
 
             # --- duplicates, so the paid step skips repeats ------------
-            _dedupe_into(state, plan, job)
-            job.completed_steps.append("dupes")
+            # Also reused: the marks live on the photo objects, so re-running
+            # the fingerprint pass over the same plan finds the same answer.
+            if reusable and state.duplicate_groups:
+                job.say(
+                    f"Reusing {len(state.duplicate_groups)} duplicate group(s) "
+                    "already found."
+                )
+                job.completed_steps.append("dupes")
+            else:
+                _dedupe_into(state, plan, job)
+                job.completed_steps.append("dupes")
             if job.cancelled:
                 return
 

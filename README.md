@@ -38,12 +38,19 @@ Copy            verified copy + tags written into the copies
                 separate, and needs typed confirmation
 ```
 
-**Or press "Run everything, including copy"** and it does all of the above in
-one pass. It asks once — a dialog stating the photo count, both folders and the
-estimated cost — and then runs to the end.
+**There is one button: "Run everything."** It sits in the header, visible at
+any scroll position, and does all of the above in one pass. It asks once — a
+dialog stating the photo count, both folders and the estimated cost — and then
+runs to the end.
 
-The separate buttons remain for running a step on its own, or for reviewing
-the proposed names before anything is copied.
+The per-step buttons are collapsed under *"Run one step at a time"* in the
+Pipeline card, for re-running a single stage or reviewing the proposed names
+before anything is copied. **Copy library…** is that same copy step on its
+own: useful once you have already reviewed the names, and unnecessary
+otherwise.
+
+A run reuses a plan already built for the same folders rather than re-reading
+14,000 files to rediscover what is in memory.
 
 There is no typed confirmation. A dialog that states the numbers and waits for
 OK is the explicit consent `CLAUDE.md` asks for; typing a word was friction,
