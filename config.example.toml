@@ -1,0 +1,159 @@
+# Photo organizer configuration.
+# Copy to config.toml and pass with --config config.toml.
+# Every key below is optional; omitted keys keep their default.
+# An unknown key is an error rather than a silent default, so typos surface.
+
+[paths]
+# Prefilled into the control panel's folder boxes. Still editable there, and
+# nothing is read from them until you press "Use these folders".
+default_source = 'D:\FotosTemp'
+default_output = 'C:\FotosTempOrganized'
+
+[cluster]
+# Start a new event after this many hours without a photo.
+time_gap_hours = 12.0
+# Start a new event after a location jump larger than this.
+distance_km = 50.0
+# A distance split also needs at least this much elapsed time, so one bad
+# GPS fix in the middle of a hike does not shatter the event.
+min_gap_minutes_for_distance_split = 20.0
+# Events smaller than this are kept but flagged in the preview.
+small_event_threshold = 3
+
+[geocode]
+# "offline"   nearest populated place from a bundled dataset (no network)
+# "nominatim" OpenStreetMap reverse geocoding (network, rate limited)
+# "none"      skip; every event is named Unknown_DD_MM
+provider = "nominatim"
+
+# NO API KEY OR TOKEN IS NEEDED for either provider.
+#   offline   - ships its own dataset, never touches the network.
+#   nominatim - OpenStreetMap's free service. No account, no key. In exchange
+#               its usage policy caps you at 1 request/second, asks for a
+#               User-Agent identifying the app, and forbids bulk geocoding.
+#               We stay inside that: results are cached per ~1 km, so a
+#               library of thousands of photos makes one request per event,
+#               not per photo.
+# Filling in an email is optional but lets OSM contact you instead of
+# silently blocking, if a run ever misbehaves.
+user_agent = "photo-organizer/0.1"
+nominatim_email = ""
+request_interval_seconds = 1.1
+
+# Lookups are cached on disk, so re-runs are free and work offline.
+cache_path = "~/.cache/photo_organizer/geocode.json"
+# Coordinate rounding for cache keys. 2 decimals is about 1.1 km.
+cache_precision = 2
+
+[scan]
+# Add RAW formats from your own cameras here if they are missing.
+# image_extensions = [".jpg", ".jpeg", ".heic", ".dng", ".cr3"]
+follow_symlinks = false
+# When EXIF has no timestamp, try the filename (IMG_20250712_083145.jpg)
+# and then the file mtime. Both are flagged as lower confidence.
+use_filename_fallback = true
+use_mtime_fallback = true
+
+[naming]
+# Fields available: {place} {dd} {mm} {yyyy} {index}
+# The year is always the parent folder, so it is redundant here.
+pattern = "{place}_{dd}_{mm}"
+
+# Enriched names are assembled as:
+#   [country_] [range_] place _activity _DD_MM
+# for example  Urner-Alps_Hannibalturm_alpine-climbing_01_09
+# The activity is in EVERY name, including the ones that got a peak, so the
+# library can be browsed by what was done as well as where. Set false to
+# leave it out; it is skipped automatically when it would repeat a word
+# already in the name.
+include_activity = true
+include_region = true
+include_country = false
+unknown_place_label = "Unknown"
+max_name_length = 60
+
+[analysis]
+# Photo analysis via Gemini, cached in a local SQLite database.
+#
+# This replaced a set of local-model experiments, all measured on this
+# library and none good enough to keep:
+#   CLIP ViT-B/32   named "K2" for a forest slope with no mountain in it
+#   qwen2.5vl:3b    named "Mount Everest" for an Alpine ice fall, high conf
+#   GeoCLIP         median error 139 km; 0 of 41 photos within 10 km
+# Gemini measured 11 km median error on the same photos and abstains when
+# unsure, which none of the local models did.
+
+# Photos analysed per event. **0 = every photo**, which is the default.
+#
+# Sampling was a false economy. Each photo is analysed once in its life and
+# the complete reply is cached forever, so the whole library costs about $2
+# once, in batch, and nothing afterwards. Sampling saved cents and lost
+# peaks: only ~27% of these photos show a placeable skyline, so any sample
+# misses events whose one identifiable frame was not picked.
+photos_per_event = 0
+
+# Ceiling on NEW photos per run; 0 removes it. The whole library in a single
+# batch is the cheapest way to do this. The real spending guard is the limit
+# set on the Google billing account, not this number.
+max_photos_per_run = 0
+
+model = "gemini-3.6-flash"
+# Batch API: half the price of interactive, target turnaround 24 hours
+# (usually much faster). Nothing here is interactive, so batch is default.
+use_batch = true
+poll_seconds = 30
+max_wait_seconds = 86400
+
+# Leave blank and set the GEMINI_API_KEY environment variable instead --
+# a key in a config file is a key that gets committed.
+gemini_api_key = ""
+
+# Analyses are cached here, keyed by the photo's content hash. A photo is
+# never analysed twice, even if it is renamed, moved or re-scanned, and
+# deleting the output folder costs nothing.
+#
+# The cache keeps the COMPLETE API reply, not just the fields parsed out of
+# it, and the schema asks for more than the pipeline currently uses. Both so
+# that a future schema change re-parses what is already stored instead of
+# re-requesting it. Never delete this file to "start clean" -- it is the
+# only copy of what was paid for.
+database_path = "~/.cache/photo_organizer/analysis.sqlite3"
+
+# Check every claimed summit against the peaks gazetteer before it can
+# reach a folder name. Build it once with:
+#   python -m photo_organizer --build-gazetteer
+# Note the limit: this proves a name is REAL, not that it is the RIGHT one.
+# A plausible neighbouring summit in the right country will pass.
+use_gazetteer = true
+peak_countries = ["CH", "FR", "IT", "AT", "SK", "DE", "NO"]
+
+# --- event location consensus ---------------------------------------------
+# A single photo's estimated position is not trustworthy: measured on this
+# library, the model placed Swiss photos in California and a Sardinian trip
+# in Provence. A position is therefore only used when several photos of the
+# same event agree, and that one agreed position is written into every photo
+# of the event. If they disagree, the event gets no coordinates at all.
+#
+# How close two estimates must be to count as agreeing.
+location_agreement_km = 25.0
+# How many must agree. One photo agreeing with itself is not consensus.
+location_min_agreeing = 2
+# And they must be this share of the photos that offered an estimate, so two
+# agreeing out of nine scattered guesses is still rejected.
+location_min_fraction = 0.4
+
+# --- reading beats recognising ---------------------------------------------
+# A summit RECOGNISED from the terrain is discarded when it sits further than
+# this from a place name READ out of the same event's photos (a signboard, a
+# hut name, a guidebook heading). The gazetteer cannot catch that on its own:
+# it only knows a name exists, which is exactly how "Salbitschijen" was
+# accepted for an event 13 km away at the Hannibalturm.
+peak_contradiction_km = 30.0
+
+# --- summit corroboration --------------------------------------------------
+# When several analysed photos of an event name a summit, the one named by
+# the most photos wins, and recognising the terrain beats reading a name off
+# a guidebook page in the frame. A peak named by one photo out of eight is
+# still used, but the preview says so -- that is exactly the weak evidence
+# that once produced a confident "Salbitschijen" for a photo taken 13 km
+# away. Check single-photo names before copying.

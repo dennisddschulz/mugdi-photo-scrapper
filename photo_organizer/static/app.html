@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo Organizer</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --panel-2: #fbfbfd; --ink: #14161a; --ink-2: #5b6472;
+  --ink-3: #8b95a4; --line: #e3e6ec; --line-2: #d2d7e0; --accent: #3d5afe; --accent-ink: #fff;
+  --warn-bg: #fff4e0; --warn-ink: #8a5a00; --warn-line: #f0d9a8; --danger: #c0392b;
+  --ok-bg: #e6f7ed; --ok-ink: #1a7943; --run: #0b7dd6;
+  --shadow: 0 1px 2px rgba(16,20,28,.06), 0 4px 16px rgba(16,20,28,.05);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115; --panel: #171a20; --panel-2: #1c2027; --ink: #e8eaee; --ink-2: #a2abba;
+    --ink-3: #6f7889; --line: #262b34; --line-2: #333945; --accent: #7c8cff; --accent-ink: #0f1115;
+    --warn-bg: #2e2410; --warn-ink: #e5b769; --warn-line: #4a3a17; --danger: #ff6b5b;
+    --ok-bg: #11291d; --ok-ink: #6ddb9c; --run: #5cb3ff;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); }
+
+header { position: sticky; top: 0; z-index: 40; background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.bar { max-width: 1500px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+.safety { display: inline-flex; align-items: center; gap: 7px; background: var(--ok-bg); color: var(--ok-ink); border-radius: 100px; padding: 4px 12px 4px 10px; font-size: 12.5px; font-weight: 600; }
+.safety::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.spacer { flex: 1 1 auto; }
+
+.btn { border: 1px solid var(--line-2); background: var(--panel); border-radius: 9px; padding: 8px 14px; font-size: 13.5px; font-weight: 550; transition: background .12s, border-color .12s; }
+.btn:hover:not(:disabled) { background: var(--panel-2); border-color: var(--ink-3); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.sm { padding: 5px 10px; font-size: 12.5px; border-radius: 7px; }
+.btn.block { width: 100%; justify-content: center; }
+
+.layout { max-width: 1500px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 360px minmax(0,1fr); gap: 20px; align-items: start; }
+@media (max-width: 1060px) { .layout { grid-template-columns: 1fr; } aside { position: static !important; } }
+aside { position: sticky; top: 68px; display: flex; flex-direction: column; gap: 14px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.card > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); margin: 0; padding: 13px 16px 0; font-weight: 650; }
+.card .body { padding: 12px 16px 16px; }
+
+label.f { display: block; font-size: 12.5px; color: var(--ink-2); margin: 10px 0 5px; font-weight: 550; }
+.path-row { display: flex; gap: 6px; }
+.inp { flex: 1 1 auto; min-width: 0; border: 1px solid var(--line-2); background: var(--panel-2); border-radius: 8px; padding: 8px 10px; font: 12.5px var(--mono); outline: none; }
+.inp:focus { border-color: var(--accent); background: var(--panel); }
+.num { width: 84px; border: 1px solid var(--line-2); background: var(--panel-2); border-radius: 8px; padding: 6px 8px; font: 13px var(--mono); outline: none; }
+select.num { width: auto; font-family: inherit; }
+.grid2 { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.msg { font-size: 12.5px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; display: none; }
+.msg.show { display: block; }
+.msg.err { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.msg.ok { background: var(--ok-bg); color: var(--ok-ink); }
+
+/* pipeline */
+.steps { list-style: none; margin: 0; padding: 0; }
+.step { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.step:last-child { border-bottom: 0; }
+.dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-2); flex: none; margin-top: 3px; display: grid; place-items: center; font-size: 9px; color: var(--panel); }
+.step.done .dot { background: var(--ok-ink); border-color: var(--ok-ink); }
+.step.done .dot::after { content: "✓"; color: #fff; font-size: 10px; font-weight: 700; }
+.step.active .dot { border-color: var(--run); border-right-color: transparent; animation: spin .7s linear infinite; }
+.step.soon { opacity: .45; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.step .t { font-size: 13.5px; font-weight: 600; }
+.step .d { font-size: 12px; color: var(--ink-3); }
+.step .pill { font-size: 10.5px; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-3); border-radius: 5px; padding: 1px 5px; margin-left: 6px; }
+
+.bar-track { height: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 100px; overflow: hidden; margin: 12px 0 6px; }
+.bar-fill { height: 100%; background: var(--run); width: 0%; transition: width .25s; }
+.runinfo { font-size: 12px; color: var(--ink-2); display: flex; justify-content: space-between; gap: 8px; }
+.logbox { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: 11.5px/1.65 var(--mono); color: var(--ink-2); max-height: 190px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* survey */
+.stats { display: flex; gap: 22px; flex-wrap: wrap; }
+.stat { display: flex; flex-direction: column; }
+.stat .n { font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
+.stat .l { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.stat.warn .n { color: var(--warn-ink); }
+.exts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+.ext { font: 11.5px var(--mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; color: var(--ink-2); }
+
+/* events */
+.event { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }
+.event.attention { border-color: var(--warn-line); }
+.event-head { padding: 15px 17px 13px; display: flex; gap: 14px; align-items: flex-start; }
+.idx { font: 12px/1 var(--mono); color: var(--ink-3); background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; flex: none; margin-top: 4px; }
+.head-main { flex: 1 1 auto; min-width: 0; }
+.name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.year { font: 14px/1 var(--mono); color: var(--ink-3); flex: none; }
+.name-input { flex: 1 1 240px; min-width: 170px; border: 1px solid transparent; background: var(--panel-2); border-radius: 8px; padding: 9px 11px; font: 550 15px/1.2 var(--mono); }
+.name-input:hover { border-color: var(--line-2); }
+.name-input:focus { outline: none; border-color: var(--accent); background: var(--panel); }
+.name-input.edited { background: color-mix(in srgb, var(--accent) 9%, var(--panel-2)); }
+.hint { font-size: 11.5px; color: var(--warn-ink); margin-top: 6px; font-family: var(--mono); }
+.meta { margin-top: 9px; font-size: 13px; color: var(--ink-2); display: flex; gap: 12px; flex-wrap: wrap; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.chip { font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 3px 8px; background: var(--panel-2); color: var(--ink-2); border: 1px solid var(--line); }
+.chip.warn { background: var(--warn-bg); color: var(--warn-ink); border-color: var(--warn-line); }
+.chip.ok { background: var(--ok-bg); color: var(--ok-ink); border-color: transparent; }
+.notes { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--ink-3); }
+.notes li::before { content: "— "; }
+.head-actions { flex: none; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.strip { display: flex; gap: 6px; padding: 0 17px 15px; overflow-x: auto; }
+.strip::-webkit-scrollbar { height: 8px; }
+.strip::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+.thumb { flex: none; width: 104px; height: 104px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); object-fit: cover; cursor: zoom-in; display: block; }
+.thumb:hover { border-color: var(--accent); }
+.thumb.placeholder { display: grid; place-items: center; font: 10px var(--mono); color: var(--ink-3); text-align: center; padding: 6px; cursor: default; overflow: hidden; word-break: break-all; }
+.more { flex: none; width: 104px; height: 104px; border-radius: 8px; border: 1px dashed var(--line-2); background: transparent; color: var(--ink-2); font-size: 12.5px; }
+.event.merged { opacity: .7; }
+.merged-bar { display: flex; align-items: center; gap: 12px; padding: 12px 17px; background: var(--panel-2); font-size: 13px; color: var(--ink-2); }
+.merged-bar b { color: var(--ink); font-family: var(--mono); font-weight: 550; }
+
+.tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.search { flex: 1 1 220px; min-width: 170px; border: 1px solid var(--line-2); background: var(--panel); border-radius: 9px; padding: 8px 12px; outline: none; }
+.search:focus { border-color: var(--accent); }
+.chip-btn { border: 1px solid var(--line-2); background: var(--panel); border-radius: 100px; padding: 6px 13px; font-size: 12.5px; font-weight: 550; color: var(--ink-2); }
+.chip-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* modal */
+.modal { position: fixed; inset: 0; z-index: 95; display: none; background: rgba(8,10,14,.6); backdrop-filter: blur(4px); }
+.modal.open { display: grid; place-items: center; padding: 24px; }
+.sheet { background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.35); width: min(680px, 100%); max-height: 78vh; display: flex; flex-direction: column; overflow: hidden; }
+.sheet h3 { margin: 0; padding: 16px 18px 12px; font-size: 15px; }
+.crumb { padding: 0 18px 12px; font: 12px var(--mono); color: var(--ink-2); word-break: break-all; }
+.drives { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 18px 12px; }
+.dirlist { flex: 1 1 auto; overflow-y: auto; border-top: 1px solid var(--line); }
+.dirlist button { display: flex; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 10px 18px; font-size: 13.5px; gap: 9px; }
+.dirlist button:hover { background: var(--panel-2); }
+.sheet-foot { display: flex; gap: 8px; padding: 13px 18px; border-top: 1px solid var(--line); align-items: center; }
+
+/* lightbox */
+.lb { position: fixed; inset: 0; z-index: 96; display: none; background: rgba(8,10,14,.9); }
+.lb.open { display: grid; grid-template-rows: 1fr auto; }
+.lb-stage { display: grid; place-items: center; padding: 22px; min-height: 0; }
+.lb-stage img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+.lb-info { background: #171a20; color: #e8eaee; border-top: 1px solid #262b34; padding: 13px 20px; display: flex; gap: 20px; flex-wrap: wrap; font: 12.5px/1.5 var(--mono); }
+.lb-info .k { color: #6f7889; }
+.lb-close { position: absolute; top: 15px; right: 18px; z-index: 2; background: rgba(255,255,255,.12); color: #fff; border: 0; width: 38px; height: 38px; border-radius: 50%; font-size: 20px; }
+.lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; background: rgba(255,255,255,.12); color: #fff; border: 0; width: 46px; height: 46px; border-radius: 50%; font-size: 22px; }
+.lb-nav.prev { left: 18px; } .lb-nav.next { right: 18px; }
+
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(12px); background: var(--ink); color: var(--bg); padding: 11px 18px; border-radius: 10px; font-size: 13.5px; font-weight: 550; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 99; max-width: 90vw; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err { background: var(--danger); color: #fff; }
+.empty { text-align: center; color: var(--ink-3); padding: 54px 20px; }
+.empty h3 { margin: 0 0 6px; color: var(--ink-2); font-size: 15px; }
+</style>
+</head>
+<body>
+
+<header><div class="bar">
+  <h1>Photo Organizer</h1>
+  <span class="safety" id="safetyChip">Copy-only — your source is never modified</span>
+  <span class="spacer"></span>
+  <button class="btn" id="quitBtn">Quit</button>
+</div></header>
+
+<div class="layout">
+  <aside>
+    <section class="card">
+      <h2>Folders</h2>
+      <div class="body">
+        <label class="f" for="srcIn">Source — your photo dump (read-only)</label>
+        <div class="path-row">
+          <input class="inp" id="srcIn" placeholder="E:\PhoneDump" spellcheck="false">
+          <button class="btn sm" id="srcBrowse">Browse</button>
+        </div>
+        <label class="f" for="outIn">Output — where the library would go</label>
+        <div class="path-row">
+          <input class="inp" id="outIn" placeholder="D:\Organized" spellcheck="false">
+          <button class="btn sm" id="outBrowse">Browse</button>
+        </div>
+        <div style="margin-top:12px"><button class="btn primary block" id="useBtn">Use these folders</button></div>
+        <div class="msg" id="pathMsg"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Settings</h2>
+      <div class="body">
+        <div class="grid2">
+          <div>
+            <label class="f" for="gapIn">New event after</label>
+            <input class="num" id="gapIn" type="number" min="0.5" max="720" step="0.5"> <span style="font-size:12px;color:var(--ink-3)">hours</span>
+          </div>
+          <div>
+            <label class="f" for="distIn">…or a jump of</label>
+            <input class="num" id="distIn" type="number" min="1" max="20000" step="1"> <span style="font-size:12px;color:var(--ink-3)">km</span>
+          </div>
+        </div>
+        <label class="f" for="geoIn">Place names</label>
+        <select class="num" id="geoIn">
+          <option value="offline">Offline database — no network, no key</option>
+          <option value="nominatim">OpenStreetMap — no key, sends coordinates</option>
+          <option value="none">Skip — name everything manually</option>
+        </select>
+        <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
+          Neither option needs an API key or account.
+        </div>
+        <div class="msg" id="cfgMsg"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Pipeline</h2>
+      <div class="body">
+        <ul class="steps" id="steps"></ul>
+        <div class="bar-track"><div class="bar-fill" id="barFill"></div></div>
+        <div class="runinfo"><span id="runLeft">Idle</span><span id="runRight"></span></div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn primary" id="runBtn" style="flex:1">Run pipeline</button>
+          <button class="btn danger" id="cancelBtn" disabled>Stop</button>
+        </div>
+        <div style="margin-top:8px">
+          <button class="btn block" id="dupesBtn" disabled>Find duplicates</button>
+          <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
+            Marks exact and near-duplicates. <b>Never deletes anything.</b>
+            Run this first so the slow steps skip repeat photos.
+          </div>
+          <div class="msg" id="dupeMsg"></div>
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn block" id="enrichBtn" disabled>Identify events…</button>
+          <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
+            Analyses photos with Gemini (Batch API, half price) and caches
+            results locally, so a photo is never analysed twice.
+          </div>
+        </div>
+        <div class="logbox" id="logBox" style="display:none"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Copy</h2>
+      <div class="body">
+        <button class="btn block primary" id="copyBtn" disabled>Copy library…</button>
+        <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
+          Copies into the output folder and writes tags into the <b>copies</b>.
+          Your source is never modified. Duplicates go to
+          <code>_duplicates_review/</code> — nothing is deleted.
+        </div>
+        <div class="msg" id="copyMsg"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Export</h2>
+      <div class="body">
+        <button class="btn block" id="saveBtn" disabled>Save name edits</button>
+        <div style="height:8px"></div>
+        <button class="btn block" id="manifestBtn" disabled>Export plan as JSON</button>
+        <div class="msg" id="expMsg"></div>
+      </div>
+    </section>
+  </aside>
+
+  <main>
+    <div id="survey"></div>
+    <div id="results"></div>
+  </main>
+</div>
+
+<div class="modal" id="browseModal"><div class="sheet">
+  <h3 id="browseTitle">Choose a folder</h3>
+  <div class="crumb" id="crumb"></div>
+  <div class="drives" id="drives"></div>
+  <div class="dirlist" id="dirlist"></div>
+  <div class="sheet-foot">
+    <button class="btn sm" id="upBtn">↑ Up</button>
+    <span class="spacer"></span>
+    <button class="btn sm" id="browseCancel">Cancel</button>
+    <button class="btn sm primary" id="browsePick">Use this folder</button>
+  </div>
+</div></div>
+
+<div class="lb" id="lb">
+  <button class="lb-close" id="lbClose">×</button>
+  <button class="lb-nav prev" id="lbPrev">‹</button>
+  <button class="lb-nav next" id="lbNext">›</button>
+  <div class="lb-stage"><img id="lbImg" alt=""></div>
+  <div class="lb-info" id="lbInfo"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const api = (p) => p + (p.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(TOKEN);
+const $ = (id) => document.getElementById(id);
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
+
+let STATUS = null, PLAN = null, edits = {}, expanded = {}, poll = null;
+let filters = { attention: false, nogps: false, edited: false, q: "" };
+let lbList = [], lbPos = 0, browseTarget = null, browsePath = "";
+
+async function jget(p) { const r = await fetch(api(p)); const d = await r.json(); if (!r.ok) throw new Error(d.error || r.statusText); return d; }
+async function jpost(p, body) {
+  const r = await fetch(api(p), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const d = await r.json(); if (!r.ok) throw new Error(d.error || r.statusText); return d;
+}
+function toast(m, err) { const t = $("toast"); t.textContent = m; t.classList.toggle("err", !!err); t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3600); }
+function msg(id, text, kind) { const n = $(id); n.textContent = text || ""; n.className = "msg" + (text ? " show " + kind : ""); }
+function bytes(n) { const u = ["B","KB","MB","GB","TB"]; let i = 0, v = n || 0; while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; } return (i === 0 ? v : v.toFixed(1)) + " " + u[i]; }
+
+/* Mirrors naming.py sanitize_label so the shown folder name is the real one. */
+function sanitize(s) {
+  if (!s) return "";
+  let t = s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x00-\x7F]/g, "");
+  t = t.replace(/[<>:"/\\|?*\x00-\x1f]/g, " ").replace(/[\s._-]+/g, "_").replace(/^_+|_+$/g, "");
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(t)) t += "_place";
+  return t.slice(0, 60).replace(/[_. ]+$/, "");
+}
+function when(iso) { return iso ? new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "no date"; }
+function range(ev) {
+  if (!ev.start) return "no date";
+  const a = new Date(ev.start), b = ev.end ? new Date(ev.end) : null;
+  const day = a.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+  const t = (d) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (!b) return day;
+  return a.toDateString() === b.toDateString() ? `${day}  ${t(a)}–${t(b)}`
+    : `${day} → ${b.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+/* ---------------- folder browser ---------------- */
+async function openBrowse(target) {
+  browseTarget = target;
+  $("browseTitle").textContent = target === "src" ? "Choose the source folder" : "Choose the output folder";
+  const start = (target === "src" ? $("srcIn").value : $("outIn").value).trim();
+  $("browseModal").classList.add("open");
+  await loadBrowse(start);
+}
+async function loadBrowse(path) {
+  let d;
+  try { d = await jget("/api/browse?path=" + encodeURIComponent(path || "")); }
+  catch (e) { toast(e.message, true); d = await jget("/api/browse?path="); }
+  browsePath = d.path || "";
+  $("crumb").textContent = browsePath || "Pick a drive";
+  const dr = $("drives"); dr.textContent = "";
+  for (const drive of d.drives) {
+    const b = el("button", "btn sm", drive.label + (drive.free != null ? `  ${bytes(drive.free)} free` : ""));
+    b.onclick = () => loadBrowse(drive.path);
+    dr.append(b);
+  }
+  const list = $("dirlist"); list.textContent = "";
+  if (!d.dirs.length) list.append(el("div", "empty", browsePath ? "No sub-folders here." : "Pick a drive above."));
+  for (const dir of d.dirs) {
+    const b = el("button"); b.append(el("span", null, "📁"), el("span", null, dir.name));
+    b.onclick = () => loadBrowse(dir.path);
+    list.append(b);
+  }
+  $("upBtn").disabled = !d.parent;
+  $("upBtn").onclick = () => loadBrowse(d.parent);
+  $("browsePick").disabled = !browsePath;
+}
+$("srcBrowse").onclick = () => openBrowse("src");
+$("outBrowse").onclick = () => openBrowse("out");
+$("browseCancel").onclick = () => $("browseModal").classList.remove("open");
+$("browsePick").onclick = () => {
+  if (browseTarget === "src") $("srcIn").value = browsePath; else $("outIn").value = browsePath;
+  $("browseModal").classList.remove("open");
+};
+$("browseModal").onclick = (e) => { if (e.target.id === "browseModal") $("browseModal").classList.remove("open"); };
+
+/* ---------------- paths + settings ---------------- */
+$("useBtn").onclick = async () => {
+  msg("pathMsg", "", "");
+  try {
+    const d = await jpost("/api/paths", { source: $("srcIn").value, output: $("outIn").value });
+    msg("pathMsg", `Ready — ${d.survey.images} image(s) found, ${bytes(d.survey.total_bytes)}.`, "ok");
+    PLAN = null; edits = {};
+    await refresh();
+  } catch (e) { msg("pathMsg", e.message, "err"); }
+};
+async function pushSettings() {
+  try {
+    await jpost("/api/settings", {
+      time_gap_hours: parseFloat($("gapIn").value),
+      distance_km: parseFloat($("distIn").value),
+      geocode: $("geoIn").value,
+    });
+    msg("cfgMsg", "Saved. Re-run the pipeline to apply.", "ok");
+  } catch (e) { msg("cfgMsg", e.message, "err"); }
+}
+for (const id of ["gapIn", "distIn", "geoIn"]) $(id).onchange = pushSettings;
+
+/* ---------------- pipeline ---------------- */
+$("runBtn").onclick = async () => {
+  // Apply whatever is in the folder boxes first. Requiring a separate
+  // "Use these folders" click before Run works is a trap: the boxes are
+  // prefilled, so the button looks ready when the server has nothing set.
+  const src = $("srcIn").value.trim(), out = $("outIn").value.trim();
+  if (!src || !out) { msg("pathMsg", "Choose a source and an output folder.", "err"); return; }
+  if (src !== STATUS.source || out !== STATUS.output) {
+    try {
+      const d = await jpost("/api/paths", { source: src, output: out });
+      msg("pathMsg", `Ready — ${d.survey.images} image(s), ${bytes(d.survey.total_bytes)}.`, "ok");
+      PLAN = null; edits = {};
+    } catch (e) { msg("pathMsg", e.message, "err"); return; }
+  }
+  try { await jpost("/api/run", { step: "plan" }); $("logBox").style.display = "block"; startPolling(); }
+  catch (e) { toast(e.message, true); }
+};
+$("cancelBtn").onclick = async () => { try { await jpost("/api/cancel"); } catch (e) { toast(e.message, true); } };
+$("enrichBtn").onclick = async () => {
+  try { await jpost("/api/run", { step: "enrich" }); $("logBox").style.display = "block"; startPolling(); }
+  catch (e) { toast(e.message, true); }
+};
+$("copyBtn").onclick = async () => {
+  const n = PLAN && PLAN.summary ? PLAN.summary.photo_count : 0;
+  const where = STATUS.output || "the output folder";
+  // Typed confirmation, not a click-through: this is the step that writes.
+  if (!confirm(`Copy ${n} photo(s) into:
+${where}
+
+`
+      + "Tags will be written into the COPIES. Your source folder is not modified.
+"
+      + "Duplicates are set aside for review; nothing is deleted.
+
+Proceed?")) return;
+  try {
+    await jpost("/api/run", { step: "copy", confirm: "COPY" });
+    $("logBox").style.display = "block"; startPolling();
+  } catch (e) { msg("copyMsg", e.message, "err"); }
+};
+$("dupesBtn").onclick = async () => {
+  try { await jpost("/api/run", { step: "dupes" }); $("logBox").style.display = "block"; startPolling(); }
+  catch (e) { toast(e.message, true); }
+};
+
+function startPolling() { if (poll) clearInterval(poll); poll = setInterval(refresh, 450); refresh(); }
+function stopPolling() { if (poll) { clearInterval(poll); poll = null; } }
+
+function renderSteps() {
+  const ul = $("steps"); ul.textContent = "";
+  const job = STATUS.job;
+  const done = new Set(job ? job.completed_steps : []);
+  for (const s of STATUS.steps) {
+    const li = el("li", "step");
+    if (!s.ready) li.classList.add("soon");
+    else if (done.has(s.id)) li.classList.add("done");
+    else if (job && job.status === "running" && job.step === s.id) li.classList.add("active");
+    li.append(el("span", "dot"));
+    const box = el("div");
+    const t = el("div", "t", s.label);
+    if (!s.ready) t.append(el("span", "pill", "later"));
+    box.append(t, el("div", "d", s.detail));
+    li.append(box);
+    ul.append(li);
+  }
+}
+
+function renderRun() {
+  const job = STATUS.job;
+  const running = !!job && job.status === "running";
+  $("cancelBtn").disabled = !running;
+  // Only a run in progress disables it. The folders are applied by the
+  // click itself, so there is no hidden precondition to discover.
+  $("runBtn").disabled = running;
+  $("runBtn").textContent = running ? "Running…" : (STATUS.has_plan ? "Re-run pipeline" : "Run pipeline");
+  // Both extra stages need a plan to work on, and cannot share the worker.
+  $("enrichBtn").disabled = running || !STATUS.has_plan;
+  $("dupesBtn").disabled = running || !STATUS.has_plan;
+  $("copyBtn").disabled = running || !STATUS.has_plan;
+  const dup = STATUS.duplicates;
+  if (dup) {
+    msg("dupeMsg",
+      `${dup.exact_groups} exact + ${dup.near_groups} near group(s); `
+      + `${dup.total_duplicates} redundant photo(s) marked. Nothing deleted.`,
+      "ok");
+  }
+  const pct = job && job.total ? Math.min(100, (job.done_count / job.total) * 100) : (job && job.status === "done" ? 100 : 0);
+  $("barFill").style.width = pct + "%";
+  if (!job) { $("runLeft").textContent = "Ready"; $("runRight").textContent = ""; return; }
+  const labels = { running: job.detail || "Working…", done: "Finished", error: "Failed", cancelled: "Stopped" };
+  let left = labels[job.status] || job.status;
+  if (job.status === "running" && job.current) left += " — " + job.current;
+  $("runLeft").textContent = left;
+
+  const parts = [];
+  if (job.total) parts.push(`${job.done_count} / ${job.total}`);
+  if (job.status === "running" && job.rate > 0) parts.push(`${job.rate.toFixed(0)}/s`);
+  if (job.status === "running" && job.eta != null) {
+    parts.push(job.eta > 90 ? `~${Math.round(job.eta / 60)} min left` : `~${Math.round(job.eta)}s left`);
+  }
+  if (job.status !== "running") parts.push(`${job.elapsed.toFixed(1)}s`);
+  $("runRight").textContent = parts.join("  ·  ");
+  if (job.log && job.log.length) {
+    const box = $("logBox"); const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.textContent = job.log.join("\n");
+    box.style.display = "block";
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+}
+
+function renderSurvey() {
+  const box = $("survey"); box.textContent = "";
+  const s = STATUS.survey;
+  if (!s) {
+    box.append(Object.assign(el("div", "card"), {}));
+    const c = box.firstChild; c.append(el("h2", null, "Getting started"));
+    const b = el("div", "body");
+    b.append(el("div", "empty", ""));
+    b.firstChild.append(el("h3", null, "Pick your photo folder to begin"),
+      el("p", null, "Nothing is read until you choose a source, and nothing is ever written to it."));
+    c.append(b);
+    return;
+  }
+  const card = el("div", "card"); card.append(el("h2", null, "What is in the source"));
+  const body = el("div", "body");
+  const stats = el("div", "stats");
+  const add = (n, l, warn) => { const d = el("div", "stat" + (warn ? " warn" : "")); d.append(el("span", "n", String(n)), el("span", "l", l)); stats.append(d); };
+  add(s.images, "images"); add(bytes(s.total_bytes), "total size");
+  add(s.other_files, "non-images (skipped)"); add(s.top_level_folders, "top-level folders");
+  body.append(stats);
+  const exts = el("div", "exts");
+  for (const [k, v] of Object.entries(s.by_extension).slice(0, 14)) exts.append(el("span", "ext", `${k} ${v}`));
+  if (Object.keys(s.by_extension).length) body.append(exts);
+  const miss = Object.entries(STATUS.backends || {}).filter(([, ok]) => !ok).map(([n]) => n);
+  if (miss.length) {
+    const w = el("div", "msg show err");
+    w.textContent = "Missing optional backends: " + miss.join(", ") + ". EXIF and thumbnails will be limited — pip install Pillow pillow-heif exifread";
+    body.append(w);
+  }
+  card.append(body); box.append(card);
+}
+
+/* ---------------- events ---------------- */
+function st(i) { if (!edits[i]) edits[i] = { name: null, merge: false }; return edits[i]; }
+function nameOf(ev) { const s = edits[ev.index]; return s && s.name != null ? s.name : ev.proposed_name; }
+function isEdited(ev) { const s = edits[ev.index]; return !!s && (s.merge || (s.name != null && s.name !== ev.proposed_name)); }
+function needsAttention(ev) { return ev.missing_gps > 0 || ev.missing_time > 0 || (ev.notes && ev.notes.length) || /^Unknown/.test(ev.proposed_name || ""); }
+function dirtyCount() { return PLAN ? PLAN.events.filter(isEdited).length : 0; }
+function matches(ev) {
+  if (filters.attention && !needsAttention(ev)) return false;
+  if (filters.nogps && ev.missing_gps === 0) return false;
+  if (filters.edited && !isEdited(ev)) return false;
+  if (filters.q) {
+    const hay = [ev.proposed_name, nameOf(ev), ev.place_label, (ev.cameras || []).join(" "), ev.year].join(" ").toLowerCase();
+    if (!hay.includes(filters.q)) return false;
+  }
+  return true;
+}
+
+function renderResults() {
+  const box = $("results"); box.textContent = "";
+  if (!PLAN || !PLAN.events.length) {
+    if (STATUS.source && !STATUS.has_plan) {
+      const c = el("div", "card"); const b = el("div", "body");
+      const e = el("div", "empty");
+      e.append(el("h3", null, "No plan yet"), el("p", null, "Press “Run pipeline” to scan the folder and see the proposed events."));
+      b.append(e); c.append(b); box.append(c);
+    }
+    return;
+  }
+  const s = PLAN.summary;
+  const head = el("div", "card"); head.append(el("h2", null, "Proposed library"));
+  const hb = el("div", "body"); const stats = el("div", "stats");
+  const add = (n, l, w) => { const d = el("div", "stat" + (w ? " warn" : "")); d.append(el("span", "n", String(n)), el("span", "l", l)); stats.append(d); };
+  add(s.event_count, "events"); add(s.photo_count, "photos"); add(bytes(s.total_bytes), "to copy");
+  add(s.missing_gps_count, "without GPS", s.missing_gps_count > 0);
+  add(s.missing_time_count, "without EXIF time", s.missing_time_count > 0);
+  hb.append(stats); head.append(hb); box.append(head);
+
+  const tools = el("div", "tools");
+  const search = el("input", "search"); search.type = "search"; search.placeholder = "Filter events…"; search.value = filters.q;
+  search.oninput = (e) => { filters.q = e.target.value.trim().toLowerCase(); renderResults(); };
+  tools.append(search);
+  for (const [key, label] of [["attention", "Needs attention"], ["nogps", "No GPS"], ["edited", "Edited"]]) {
+    const b = el("button", "chip-btn", label);
+    b.setAttribute("aria-pressed", String(filters[key]));
+    b.onclick = () => { filters[key] = !filters[key]; renderResults(); };
+    tools.append(b);
+  }
+  box.append(tools);
+
+  let prevKept = null, shown = 0;
+  for (const ev of PLAN.events) {
+    const s2 = st(ev.index);
+    const merged = s2.merge && prevKept;
+    if (matches(ev) || merged) { box.append(renderEvent(ev, prevKept)); shown++; }
+    if (!merged) prevKept = ev;
+  }
+  if (!shown) box.append(el("div", "empty", "No events match this filter."));
+  $("saveBtn").disabled = dirtyCount() === 0;
+}
+
+function renderEvent(ev, prevKept) {
+  const s = st(ev.index);
+  const card = el("div", "event");
+  if (s.merge && prevKept) {
+    card.classList.add("merged");
+    const bar = el("div", "merged-bar");
+    bar.append(el("span", null, `Event ${ev.index} — ${ev.photo_count} photo(s) — folded into`),
+               el("b", null, prevKept.year + "/" + sanitize(nameOf(prevKept))));
+    const u = el("button", "btn sm", "Undo"); u.onclick = () => { s.merge = false; renderResults(); };
+    bar.append(el("span", "spacer"), u); card.append(bar); return card;
+  }
+  if (needsAttention(ev)) card.classList.add("attention");
+
+  const head = el("div", "event-head");
+  head.append(el("div", "idx", "#" + ev.index));
+  const main = el("div", "head-main");
+  const row = el("div", "name-row");
+  row.append(el("span", "year", ev.year + "/"));
+  const input = el("input", "name-input");
+  input.value = nameOf(ev); input.spellcheck = false;
+  input.setAttribute("aria-label", "Folder name for event " + ev.index);
+  if (isEdited(ev)) input.classList.add("edited");
+  const hint = el("div", "hint");
+  const setHint = () => {
+    const c = sanitize(input.value);
+    hint.textContent = !c ? "empty — the proposal will be used" : (c !== input.value ? "folder will be: " + c : "");
+  };
+  input.oninput = () => { s.name = input.value; input.classList.toggle("edited", input.value !== ev.proposed_name); setHint(); $("saveBtn").disabled = dirtyCount() === 0; };
+  setHint();
+  row.append(input); main.append(row, hint);
+
+  const meta = el("div", "meta");
+  meta.append(el("span", null, range(ev)), el("span", null, ev.photo_count + " photos"), el("span", null, bytes(ev.size_bytes)));
+  if (ev.place_label) meta.append(el("span", null, ev.place_label));
+  if (ev.lat != null) {
+    const a = el("a", null, ev.lat.toFixed(4) + ", " + ev.lon.toFixed(4));
+    a.href = `https://www.openstreetmap.org/?mlat=${ev.lat}&mlon=${ev.lon}#map=13/${ev.lat}/${ev.lon}`;
+    a.target = "_blank"; a.rel = "noreferrer noopener";
+    a.title = "Opens OpenStreetMap in a new tab (sends these coordinates)";
+    meta.append(a);
+  }
+  main.append(meta);
+
+  const chips = el("div", "chips");
+  const chip = (t, c) => chips.append(el("span", "chip" + (c ? " " + c : ""), t));
+  // Identification results first: these are what the name is based on.
+  if (ev.name_source && ev.name_source !== "none") chip("named from " + ev.name_source, "ok");
+  if (ev.activity) chip(ev.activity.replace(/_/g, " "), "ok");
+  if (ev.place_name) chip("place: " + ev.place_name, "ok");
+  if (ev.route_name) chip("route: " + ev.route_name);
+  if (ev.mountain_range) chip("range: " + ev.mountain_range, "ok");
+  if (ev.region) chip(ev.region);
+  if (ev.country) chip(ev.country, "ok");
+  if (ev.missing_gps) chip(`${ev.missing_gps}/${ev.photo_count} without GPS`, "warn");
+  if (ev.missing_time) chip(`${ev.missing_time}/${ev.photo_count} without EXIF time`, "warn");
+  if (ev.heading_count) chip(`compass heading on ${ev.heading_count}`, "ok");
+  if (ev.span_km >= 1) chip(`spans ${ev.span_km} km`);
+  for (const c of ev.cameras || []) chip(c);
+  if (chips.children.length) main.append(chips);
+
+  if (ev.notes && ev.notes.length) {
+    const ul = el("ul", "notes");
+    for (const n of ev.notes) ul.append(el("li", null, n));
+    main.append(ul);
+  }
+  // Why the name says what it says, so a wrong guess is visible.
+  if (ev.evidence && ev.evidence.length) {
+    const ul = el("ul", "notes");
+    ul.style.color = "var(--ok-ink)";
+    for (const e2 of ev.evidence) ul.append(el("li", null, e2));
+    main.append(ul);
+  }
+  if (ev.enriched_lat != null) {
+    const rec = el("div", "hint");
+    rec.style.color = "var(--ok-ink)";
+    rec.textContent = `location recovered from text: ${ev.enriched_lat.toFixed(4)}, ${ev.enriched_lon.toFixed(4)}`;
+    main.append(rec);
+  }
+  head.append(main);
+
+  const acts = el("div", "head-actions");
+  if (prevKept) {
+    const m = el("button", "btn sm", "↑ Merge up");
+    m.title = "Fold this event into the one above";
+    m.onclick = () => { s.merge = true; renderResults(); };
+    acts.append(m);
+  }
+  if (isEdited(ev)) { const r = el("button", "btn sm", "Reset"); r.onclick = () => { edits[ev.index] = { name: null, merge: false }; renderResults(); }; acts.append(r); }
+  head.append(acts); card.append(head);
+
+  const strip = el("div", "strip");
+  const cap = expanded[ev.index] ? ev.photos.length : Math.min(ev.photos.length, 20);
+  for (let i = 0; i < cap; i++) {
+    const p = ev.photos[i];
+    if (!STATUS.thumbnails) { strip.append(el("div", "thumb placeholder", p.name)); continue; }
+    const img = el("img", "thumb");
+    img.loading = "lazy"; img.decoding = "async"; img.src = api("/img/" + p.id);
+    img.alt = p.name; img.title = p.name + "\n" + when(p.time);
+    img.onclick = () => { lbList = ev.photos; lbPos = i; $("lb").classList.add("open"); showLb(); };
+    img.onerror = () => img.replaceWith(el("div", "thumb placeholder", p.name));
+    strip.append(img);
+  }
+  if (ev.photos.length > cap) {
+    const b = el("button", "more", `+${ev.photos.length - cap}`);
+    b.onclick = () => { expanded[ev.index] = true; renderResults(); };
+    strip.append(b);
+  }
+  card.append(strip);
+  return card;
+}
+
+/* ---------------- lightbox ---------------- */
+function showLb() {
+  const p = lbList[lbPos]; if (!p) return;
+  $("lbImg").src = api("/img/" + p.id + "?full=1"); $("lbImg").alt = p.name;
+  const info = $("lbInfo"); info.textContent = "";
+  const pair = (k, v) => { if (v == null || v === "") return; const w = el("span"); w.append(el("span", "k", k + " "), document.createTextNode(String(v))); info.append(w); };
+  pair("file", p.name);
+  pair("taken", when(p.time) + (p.time_source !== "exif" ? ` (from ${p.time_source})` : ""));
+  if (p.lat != null) pair("gps", p.lat.toFixed(5) + ", " + p.lon.toFixed(5));
+  if (p.altitude != null) pair("alt", Math.round(p.altitude) + " m");
+  if (p.heading != null) pair("heading", Math.round(p.heading) + "°");
+  if (p.width) pair("size", p.width + "×" + p.height);
+  pair("bytes", bytes(p.size)); pair("camera", p.camera); pair("copies to", p.dest);
+  if (p.warnings && p.warnings.length) pair("warnings", p.warnings.join("; "));
+  pair("", `${lbPos + 1} / ${lbList.length}`);
+}
+const closeLb = () => { $("lb").classList.remove("open"); $("lbImg").src = ""; };
+const stepLb = (d) => { lbPos = (lbPos + d + lbList.length) % lbList.length; showLb(); };
+$("lbClose").onclick = closeLb; $("lbPrev").onclick = () => stepLb(-1); $("lbNext").onclick = () => stepLb(1);
+$("lb").onclick = (e) => { if (e.target.id === "lb") closeLb(); };
+
+/* ---------------- export + quit ---------------- */
+$("saveBtn").onclick = async () => {
+  const payload = { events: PLAN.events.map((ev) => {
+    const s = edits[ev.index];
+    return { index: ev.index, name: s && s.name != null ? s.name : ev.proposed_name, merge_into_previous: !!(s && s.merge) };
+  }) };
+  try { const d = await jpost("/api/save", payload); msg("expMsg", "Saved to " + d.path, "ok"); toast("Edits saved"); }
+  catch (e) { msg("expMsg", e.message, "err"); }
+};
+$("manifestBtn").onclick = async () => {
+  try { const d = await jpost("/api/manifest", {}); msg("expMsg", "Manifest written to " + d.path, "ok"); }
+  catch (e) { msg("expMsg", e.message, "err"); }
+};
+$("quitBtn").onclick = async () => {
+  if (dirtyCount() > 0 && !confirm("You have unsaved name edits. Quit anyway?")) return;
+  try { await jpost("/api/quit"); } catch (e) {}
+  stopPolling();
+  document.body.innerHTML = '<div class="empty" style="padding-top:120px"><h3>Photo Organizer has stopped.</h3><p>Nothing was written to your photos. You can close this tab.</p></div>';
+};
+
+document.addEventListener("keydown", (e) => {
+  if ($("lb").classList.contains("open")) {
+    if (e.key === "Escape") closeLb();
+    if (e.key === "ArrowLeft") stepLb(-1);
+    if (e.key === "ArrowRight") stepLb(1);
+  } else if (e.key === "Escape" && $("browseModal").classList.contains("open")) {
+    $("browseModal").classList.remove("open");
+  }
+});
+window.addEventListener("beforeunload", (e) => { if (dirtyCount() > 0) { e.preventDefault(); e.returnValue = ""; } });
+
+/* ---------------- refresh loop ---------------- */
+let lastPlanAt = null;
+/* A dead session must never look like a slow one. If the poll cannot reach
+   the app -- stale token from a restarted server, or the process is gone --
+   say so instead of leaving a frozen page that reads as "still working". */
+function showDisconnected(reason) {
+  if (document.getElementById("disconnected")) return;
+  stopPolling();
+  const bar = el("div");
+  bar.id = "disconnected";
+  bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:200;background:var(--danger);"
+    + "color:#fff;padding:12px 20px;font-size:13.5px;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.3)";
+  bar.textContent = reason + "  Restart with:  python -m photo_organizer --serve  "
+    + "— then open the new link it prints. This page cannot recover on its own.";
+  document.body.append(bar);
+}
+
+async function refresh() {
+  try {
+    STATUS = await jget("/api/status");
+  } catch (e) {
+    const stale = /bad token|403/i.test(e.message || "");
+    showDisconnected(
+      stale
+        ? "This page's token belongs to an app session that has stopped."
+        : "Lost contact with the app — it is no longer running."
+    );
+    return;
+  }
+  const gone = document.getElementById("disconnected");
+  if (gone) gone.remove();
+  // Fall back to the configured defaults so the boxes are never empty, but
+  // never overwrite what the user is currently typing.
+  if (!$("srcIn").matches(":focus")) $("srcIn").value = STATUS.source || $("srcIn").value || STATUS.suggested_source || "";
+  if (!$("outIn").matches(":focus")) $("outIn").value = STATUS.output || $("outIn").value || STATUS.suggested_output || "";
+  if (!$("gapIn").matches(":focus")) $("gapIn").value = STATUS.config.time_gap_hours;
+  if (!$("distIn").matches(":focus")) $("distIn").value = STATUS.config.distance_km;
+  if (document.activeElement !== $("geoIn")) $("geoIn").value = STATUS.config.geocode;
+
+  renderSteps(); renderRun(); renderSurvey();
+  $("manifestBtn").disabled = !STATUS.has_plan;
+
+  if (STATUS.has_plan && STATUS.plan_built_at !== lastPlanAt) {
+    lastPlanAt = STATUS.plan_built_at;
+    edits = {}; expanded = {};
+    try { PLAN = await jget("/api/plan"); } catch (e) { PLAN = null; }
+  }
+  renderResults();
+
+  const job = STATUS.job;
+  if (job && job.status !== "running") {
+    stopPolling();
+    if (job.status === "error") toast(job.error, true);
+    else if (job.status === "done") toast("Pipeline finished — nothing was written");
+  }
+}
+
+/* This file is a TEMPLATE. The server substitutes the token and answers the
+   /api calls. Opened straight off disk it can do nothing at all, so say so
+   loudly instead of failing silently on every button. */
+function servedFromDisk() {
+  // Split so the server's own placeholder substitution cannot rewrite it.
+  const placeholder = "__" + "TOKEN__";
+  return location.protocol === "file:" || TOKEN === placeholder || !TOKEN;
+}
+
+function showOpenedWrongPage() {
+  document.body.innerHTML = "";
+  const wrap = el("div");
+  wrap.style.cssText = "max-width:720px;margin:60px auto;padding:0 24px";
+  const card = el("div", "card");
+  card.append(el("h2", null, "This page needs the app running behind it"));
+  const b = el("div", "body");
+  b.append(el("p", null,
+    "You have opened the raw HTML file from disk. It is only a template — "
+    + "there is no application behind it, so the folder browser, your saved "
+    + "defaults, and the pipeline buttons cannot work."));
+  b.append(el("p", null, "Start the app from a terminal:"));
+  const pre = el("pre");
+  pre.style.cssText = "background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font:12.5px var(--mono)";
+  pre.textContent = "python -m photo_organizer --serve";
+  b.append(pre);
+  b.append(el("p", null,
+    "It prints a http://127.0.0.1:8080/ link containing a one-time token. "
+    + "Open that link — not this file. The token is what lets the page talk "
+    + "to the app, so bookmarking this file will never work."));
+  const note = el("div", "msg show err");
+  note.textContent = "Nothing has been read or written. This page is inert.";
+  b.append(note);
+  card.append(b); wrap.append(card); document.body.append(wrap);
+}
+
+(async function init() {
+  if (servedFromDisk()) { showOpenedWrongPage(); return; }
+  await refresh();
+  if (STATUS && STATUS.job && STATUS.job.status === "running") startPolling();
+})();
+</script>
+</body>
+</html>

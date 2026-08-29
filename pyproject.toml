@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-organizer"
+version = "0.1.0"
+description = "Non-destructive photo library organizer: cluster, name, tag, rate."
+requires-python = ">=3.11"
+# The core planner (scan/cluster/name/preview) runs on the standard library
+# alone. Everything below is an optional accelerator.
+dependencies = []
+
+[project.optional-dependencies]
+# Reading EXIF, timestamps, thumbnails and HEIC.
+exif = ["exifread>=3.0", "Pillow>=10.0", "pillow-heif>=0.15"]
+# Writing XMP/IPTC tags into the copies (milestone 3).
+metadata = ["pyexiv2>=2.9"]
+# Corporate TLS proxies re-sign HTTPS with a root certifi does not trust.
+net = ["truststore>=0.9"]
+# Everything the pipeline actually uses.
+full = [
+    "exifread>=3.0", "Pillow>=10.0", "pillow-heif>=0.15",
+    "pyexiv2>=2.9", "truststore>=0.9",
+]
+dev = ["pyflakes>=3.0"]
+
+[project.scripts]
+photo-organizer = "photo_organizer.cli:main"
+
+[tool.setuptools]
+packages = ["photo_organizer"]
+
+[tool.setuptools.package-data]
+photo_organizer = ["static/*.html"]

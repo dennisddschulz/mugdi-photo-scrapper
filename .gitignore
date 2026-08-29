@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Local runtime output -- never commit photo data or plans
+config.toml
+names.toml
+photo_plan_edits.toml
+*.manifest.json
+plan.json
+photo_plan.json
+*.log
+
+# Never commit credentials
+*.key
+.gemini_key
+.env
+secrets.toml

@@ -1,0 +1,1048 @@
+"""The local control panel: browse folders, run pipeline steps, review results.
+
+Runs on demand, on the loopback interface, and stops when you close it. It is
+a local batch tool with a browser front end, not a service: nothing is
+installed, nothing autostarts, and closing the page's Quit button ends the
+process.
+
+Safety, unchanged from the rest of the tool:
+
+* Source files are opened read-only. The only writes are the edits file and
+  the manifest, both through `guard_write_target`.
+* Photos are addressed by integer index into the current plan, never by
+  path, so no URL can name a file that is not already in the plan.
+* The folder browser returns directory names only -- never file contents.
+* Loopback bind plus a per-session token on every route.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+import os
+import secrets
+import string
+import threading
+import traceback
+import webbrowser
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import parse_qs, unquote, urlparse
+
+from .config import Config
+from .exif import BACKENDS, backend_availability
+from .geo import bbox_span_km, medoid
+from .manifest import save_manifest, write_edits_file
+from .models import Photo, Plan
+from .planner import build_plan
+from .scan import Cancelled, UnsafePathError, _resolve, check_paths, survey_source
+
+log = logging.getLogger(__name__)
+
+STATIC_DIR = Path(__file__).parent / "static"
+DEFAULT_PORT = 8080
+
+THUMB_SIZE = 260
+FULL_SIZE = 1600
+THUMB_CACHE_ENTRIES = 600
+
+# Pipeline stages shown in the UI. Milestones 2-4 are declared but disabled,
+# so the roadmap is visible rather than mysteriously absent.
+STEPS = [
+    {"id": "scan", "label": "Scan", "detail": "Read EXIF, GPS and timestamps", "ready": True},
+    {"id": "cluster", "label": "Cluster", "detail": "Group photos into events", "ready": True},
+    {"id": "name", "label": "Name", "detail": "Propose names from GPS", "ready": True},
+    {"id": "plan", "label": "Plan", "detail": "Work out destination paths", "ready": True},
+    {
+        "id": "dupes",
+        "label": "Duplicates",
+        "detail": "Find exact and near-duplicates — marked, never deleted",
+        "ready": True,
+        "separate": True,
+    },
+    {
+        "id": "analyze",
+        "label": "Identify",
+        "detail": "Analyse photos with Gemini (batch, half price) and name events",
+        "ready": True,
+        "separate": True,
+    },
+    {
+        "id": "copy",
+        "label": "Copy",
+        "detail": "Copy into the library and write tags into the copies",
+        "ready": True,
+        "separate": True,
+        "destructive": False,
+    },
+]
+
+
+# --------------------------------------------------------------------------
+# Thumbnails
+# --------------------------------------------------------------------------
+
+
+class ThumbnailRenderer:
+    """Decodes source images to bounded JPEGs, with a small LRU cache."""
+
+    def __init__(self) -> None:
+        self._cache: OrderedDict[tuple[str, int], bytes] = OrderedDict()
+        self._lock = threading.Lock()
+        self.available = BACKENDS.pillow is not None
+        self.heif = BACKENDS.heif
+
+    def render(self, photo: Photo, max_size: int) -> Optional[bytes]:
+        key = (str(photo.source_path), max_size)
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit is not None:
+                self._cache.move_to_end(key)
+                return hit
+
+        data = self._render_uncached(photo, max_size)
+        if data is None:
+            return None
+        with self._lock:
+            self._cache[key] = data
+            self._cache.move_to_end(key)
+            while len(self._cache) > THUMB_CACHE_ENTRIES:
+                self._cache.popitem(last=False)
+        return data
+
+    def _render_uncached(self, photo: Photo, max_size: int) -> Optional[bytes]:
+        Image = BACKENDS.pillow
+        if Image is None:
+            return None
+        try:
+            from PIL import ImageOps
+
+            with Image.open(photo.source_path) as img:
+                # draft() decodes JPEGs at reduced resolution -- far cheaper
+                # than a full decode when we only want a thumbnail.
+                try:
+                    img.draft("RGB", (max_size * 2, max_size * 2))
+                except (AttributeError, ValueError):
+                    pass
+                img = ImageOps.exif_transpose(img) or img
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                img.thumbnail((max_size, max_size), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, "JPEG", quality=82, optimize=True)
+                return buf.getvalue()
+        except Exception as exc:
+            log.debug("Could not render %s: %s", photo.source_path, exc)
+            return None
+
+
+# --------------------------------------------------------------------------
+# Background job
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Job:
+    """One pipeline run, executing on a worker thread."""
+
+    name: str
+    status: str = "running"  # running | done | error | cancelled
+    step: str = ""
+    detail: str = ""
+    done_count: int = 0
+    total: int = 0
+    current: str = ""
+    warnings: int = 0
+    skipped: int = 0
+    started: datetime = field(default_factory=datetime.now)
+    finished: Optional[datetime] = None
+    error: Optional[str] = None
+    log: deque = field(default_factory=lambda: deque(maxlen=400))
+    completed_steps: list[str] = field(default_factory=list)
+    _cancel: threading.Event = field(default_factory=threading.Event)
+
+    def say(self, message: str) -> None:
+        self.log.append(f"{datetime.now():%H:%M:%S}  {message}")
+        log.info("%s", message)
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+    def to_dict(self) -> dict[str, Any]:
+        elapsed = ((self.finished or datetime.now()) - self.started).total_seconds()
+        rate = self.done_count / elapsed if elapsed > 0.5 and self.done_count else 0.0
+        remaining = max(0, self.total - self.done_count)
+        # Only offer an ETA once the rate has settled; an estimate from the
+        # first few cached files is worse than no estimate at all.
+        eta = remaining / rate if rate > 0 and self.done_count >= 200 else None
+        return {
+            "name": self.name,
+            "status": self.status,
+            "step": self.step,
+            "detail": self.detail,
+            "done_count": self.done_count,
+            "total": self.total,
+            "current": self.current,
+            "warnings": self.warnings,
+            "skipped": self.skipped,
+            "elapsed": elapsed,
+            "rate": rate,
+            "eta": eta,
+            "error": self.error,
+            "log": list(self.log),
+            "completed_steps": list(self.completed_steps),
+        }
+
+
+class AppState:
+    """Everything the running app holds. Guarded by a lock for the job."""
+
+    def __init__(self, config: Config, edits_path: Path) -> None:
+        self.config = config
+        self.default_edits_path = edits_path
+        # Prefilled into the UI's text boxes only. Nothing is read from these
+        # until the user presses "Use these folders", so a missing or
+        # unplugged drive costs nothing at startup.
+        self.suggested_source = config.paths.default_source
+        self.suggested_output = config.paths.default_output
+        self.token = secrets.token_urlsafe(24)
+        self.renderer = ThumbnailRenderer()
+        self.source: Optional[Path] = None
+        self.output: Optional[Path] = None
+        self.plan: Optional[Plan] = None
+        self.plan_built_at: Optional[datetime] = None
+        self.job: Optional[Job] = None
+        self.survey: Optional[dict] = None
+        self.photos_by_id: list[Photo] = []
+        self.last_saved: Optional[str] = None
+        self.duplicate_groups: list = []
+        self.duplicate_stats = None
+        self.copy_stats = None
+        self._lock = threading.Lock()
+
+    # -- plan access ------------------------------------------------------
+
+    def set_plan(self, plan: Plan) -> None:
+        self.plan = plan
+        self.plan_built_at = datetime.now()
+        self.photos_by_id = [p for event in plan.events for p in event.photos]
+
+    def photo(self, photo_id: int) -> Optional[Photo]:
+        if 0 <= photo_id < len(self.photos_by_id):
+            return self.photos_by_id[photo_id]
+        return None
+
+    # -- jobs -------------------------------------------------------------
+
+    def start_job(self, name: str, target) -> tuple[bool, str]:
+        with self._lock:
+            if self.job is not None and self.job.status == "running":
+                return False, f"{self.job.name} is already running"
+            job = Job(name=name)
+            self.job = job
+
+        def run() -> None:
+            try:
+                target(job)
+                if job.cancelled:
+                    job.status = "cancelled"
+                    job.say("Cancelled. Nothing was written.")
+                else:
+                    job.status = "done"
+            except Cancelled:
+                job.status = "cancelled"
+                job.say("Cancelled. Nothing was written.")
+            except UnsafePathError as exc:
+                job.status = "error"
+                job.error = str(exc)
+                job.say(f"Refused: {exc}")
+            except Exception as exc:
+                job.status = "error"
+                job.error = f"{type(exc).__name__}: {exc}"
+                job.say(f"Failed: {job.error}")
+                log.debug("Job failed\n%s", traceback.format_exc())
+            finally:
+                job.finished = datetime.now()
+
+        threading.Thread(target=run, daemon=True, name=f"job-{name}").start()
+        return True, "started"
+
+    # -- serialization ----------------------------------------------------
+
+    def status_dict(self) -> dict[str, Any]:
+        return {
+            "source": str(self.source) if self.source else "",
+            "output": str(self.output) if self.output else "",
+            "suggested_source": self.suggested_source,
+            "suggested_output": self.suggested_output,
+            "has_plan": self.plan is not None,
+            "plan_built_at": (
+                self.plan_built_at.isoformat() if self.plan_built_at else None
+            ),
+            "survey": self.survey,
+            "job": self.job.to_dict() if self.job else None,
+            "steps": STEPS,
+            "config": {
+                "time_gap_hours": self.config.cluster.time_gap_hours,
+                "distance_km": self.config.cluster.distance_km,
+                "geocode": self.config.geocode.provider,
+            },
+            "backends": backend_availability(),
+            "thumbnails": self.renderer.available,
+            "edits_path": str(self.default_edits_path),
+            "last_saved": self.last_saved,
+            "duplicates": (
+                self.duplicate_stats.to_dict() if self.duplicate_stats else None
+            ),
+        }
+
+    def plan_dict(self) -> dict[str, Any]:
+        plan = self.plan
+        if plan is None:
+            return {"events": [], "summary": None}
+        events = []
+        photo_id = 0
+        for event in plan.events:
+            points = [p.coords for p in event.gps_photos]
+            reference = medoid(points) if points else None
+            photos = []
+            for photo in event.photos:
+                photos.append(
+                    {
+                        "id": photo_id,
+                        "name": photo.source_path.name,
+                        "dest": photo.dest_name,
+                        "time": photo.timestamp.isoformat() if photo.timestamp else None,
+                        "time_source": photo.timestamp_source,
+                        "lat": photo.lat,
+                        "lon": photo.lon,
+                        "altitude": photo.altitude,
+                        "heading": photo.heading,
+                        "camera": photo.camera,
+                        "size": photo.size_bytes,
+                        "width": photo.width,
+                        "height": photo.height,
+                        "warnings": photo.warnings,
+                    }
+                )
+                photo_id += 1
+            events.append(
+                {
+                    "index": event.index,
+                    "proposed_name": event.proposed_name,
+                    "year": event.year,
+                    "rel_dir": event.rel_dir.as_posix(),
+                    "place_label": event.place_label,
+                    "start": event.start.isoformat() if event.start else None,
+                    "end": event.end.isoformat() if event.end else None,
+                    "photo_count": len(event.photos),
+                    "size_bytes": sum(p.size_bytes for p in event.photos),
+                    "missing_gps": event.missing_gps_count,
+                    "missing_time": event.missing_time_count,
+                    "heading_count": event.heading_count,
+                    "cameras": event.cameras,
+                    "notes": event.notes,
+                    "lat": reference[0] if reference else None,
+                    "lon": reference[1] if reference else None,
+                    "span_km": round(bbox_span_km(points), 2) if points else 0.0,
+                    # Identification results, shown as the reasoning behind
+                    # a proposed name rather than hidden behind it.
+                    "activity": event.activity,
+                    "place_name": event.place_name,
+                    "route_name": event.route_name,
+                    "mountain_range": event.mountain_range,
+                    "region": event.region,
+                    "country": event.country,
+                    "country_code": event.country_code,
+                    "enriched_lat": event.enriched_lat,
+                    "enriched_lon": event.enriched_lon,
+                    "name_source": event.name_source,
+                    "tag_summary": [list(t) for t in event.tag_summary],
+                    "evidence": event.evidence,
+                    "photos": photos,
+                }
+            )
+        return {
+            "source_root": str(plan.source_root),
+            "output_root": str(plan.output_root),
+            "summary": {
+                "event_count": len(plan.events),
+                "photo_count": plan.photo_count,
+                "total_bytes": plan.total_bytes,
+                "skipped_count": len(plan.skipped),
+                "missing_gps_count": plan.missing_gps_count,
+                "missing_time_count": plan.missing_time_count,
+            },
+            "events": events,
+        }
+
+
+# --------------------------------------------------------------------------
+# Folder browsing
+# --------------------------------------------------------------------------
+
+
+def list_drives() -> list[dict[str, str]]:
+    """Windows drive letters that currently exist, with free space."""
+    drives = []
+    if os.name == "nt":
+        import shutil as _shutil
+
+        for letter in string.ascii_uppercase:
+            root = f"{letter}:\\"
+            if not os.path.exists(root):
+                continue
+            entry = {"path": root, "label": f"{letter}:"}
+            try:
+                usage = _shutil.disk_usage(root)
+                entry["free"] = usage.free
+                entry["total"] = usage.total
+            except OSError:
+                pass
+            drives.append(entry)
+    else:
+        drives.append({"path": "/", "label": "/"})
+    return drives
+
+
+def browse(path_str: str) -> dict[str, Any]:
+    """List subdirectories of a path. Directory names only, never files."""
+    if not path_str:
+        return {"path": "", "parent": None, "dirs": [], "drives": list_drives()}
+
+    path = _resolve(Path(path_str))
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
+    if not path.is_dir():
+        raise NotADirectoryError(f"{path} is not a folder")
+
+    dirs = []
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                if entry.name.startswith("."):
+                    continue
+                dirs.append({"name": entry.name, "path": str(Path(entry.path))})
+    except PermissionError as exc:
+        raise PermissionError(f"Cannot read {path}: {exc}") from None
+
+    dirs.sort(key=lambda d: d["name"].lower())
+    parent = str(path.parent) if path.parent != path else None
+    return {
+        "path": str(path),
+        "parent": parent,
+        "dirs": dirs,
+        "drives": list_drives(),
+    }
+
+
+# --------------------------------------------------------------------------
+# HTTP handler
+# --------------------------------------------------------------------------
+
+
+class AppHandler(BaseHTTPRequestHandler):
+    server_version = "PhotoOrganizer/0.1"
+    state: AppState  # injected by make_server
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt: str, *args) -> None:
+        log.debug("%s - %s", self.address_string(), fmt % args)
+
+    # -- helpers ----------------------------------------------------------
+
+    def _send(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        extra: Optional[dict[str, str]] = None,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+            "script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'",
+        )
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, status: int, payload: dict) -> None:
+        self._send(
+            status,
+            json.dumps(payload, default=str).encode("utf-8"),
+            "application/json; charset=utf-8",
+        )
+
+    def _authorized(self, query: dict[str, list[str]]) -> bool:
+        supplied = (query.get("t") or [""])[0]
+        return secrets.compare_digest(supplied, self.state.token)
+
+    def _body(self) -> Optional[dict]:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 8 * 1024 * 1024:
+            self._json(413, {"error": "payload too large"})
+            return None
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._json(400, {"error": f"bad JSON: {exc}"})
+            return None
+
+    # -- GET --------------------------------------------------------------
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        route = parsed.path
+
+        if route == "/":
+            if not self._authorized(query):
+                self._send(
+                    403,
+                    b"Forbidden: open the URL printed in the terminal, "
+                    b"which includes this session's token.",
+                    "text/plain; charset=utf-8",
+                )
+                return
+            try:
+                html = (STATIC_DIR / "app.html").read_bytes()
+            except OSError as exc:
+                self._send(500, f"UI missing: {exc}".encode(), "text/plain")
+                return
+            self._send(
+                200,
+                html.replace(b"__TOKEN__", self.state.token.encode()),
+                "text/html; charset=utf-8",
+            )
+            return
+
+        if not self._authorized(query):
+            self._json(403, {"error": "bad token"})
+            return
+
+        if route == "/api/status":
+            self._json(200, self.state.status_dict())
+            return
+        if route == "/api/plan":
+            self._json(200, self.state.plan_dict())
+            return
+        if route == "/api/browse":
+            self._browse(query)
+            return
+        if route.startswith("/img/"):
+            self._image(route, query)
+            return
+        self._json(404, {"error": "not found"})
+
+    # -- POST -------------------------------------------------------------
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        if not self._authorized(query):
+            self._json(403, {"error": "bad token"})
+            return
+
+        payload = self._body()
+        if payload is None:
+            return
+        route = parsed.path
+
+        if route == "/api/paths":
+            self._set_paths(payload)
+        elif route == "/api/settings":
+            self._settings(payload)
+        elif route == "/api/run":
+            self._run(payload)
+        elif route == "/api/cancel":
+            job = self.state.job
+            if job and job.status == "running":
+                job.cancel()
+                self._json(200, {"ok": True})
+            else:
+                self._json(409, {"error": "nothing running"})
+        elif route == "/api/save":
+            self._save(payload)
+        elif route == "/api/manifest":
+            self._manifest(payload)
+        elif route == "/api/quit":
+            self._json(200, {"ok": True})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+        else:
+            self._json(404, {"error": "not found"})
+
+    # -- handlers ---------------------------------------------------------
+
+    def _browse(self, query: dict[str, list[str]]) -> None:
+        raw = unquote((query.get("path") or [""])[0])
+        try:
+            self._json(200, browse(raw))
+        except (OSError, ValueError) as exc:
+            self._json(400, {"error": str(exc)})
+
+    def _set_paths(self, payload: dict) -> None:
+        """Validate a source/output pair without scanning anything."""
+        source = (payload.get("source") or "").strip()
+        output = (payload.get("output") or "").strip()
+        if not source or not output:
+            self._json(400, {"error": "both a source and an output are required"})
+            return
+        try:
+            resolved_source, resolved_output = check_paths(Path(source), Path(output))
+        except UnsafePathError as exc:
+            self._json(400, {"error": str(exc)})
+            return
+
+        state = self.state
+        state.source, state.output = resolved_source, resolved_output
+        state.plan = None
+        state.photos_by_id = []
+        state.plan_built_at = None
+
+        try:
+            state.survey = survey_source(resolved_source, state.config.scan)
+        except OSError as exc:
+            self._json(400, {"error": f"cannot read source: {exc}"})
+            return
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "source": str(resolved_source),
+                "output": str(resolved_output),
+                "survey": state.survey,
+            },
+        )
+
+    def _settings(self, payload: dict) -> None:
+        cfg = self.state.config
+        try:
+            # An empty number box arrives as JSON null (JS NaN does not
+            # survive JSON.stringify). Treat that as "leave unchanged"
+            # rather than crashing on float(None).
+            if payload.get("time_gap_hours") is not None:
+                try:
+                    value = float(payload["time_gap_hours"])
+                except (TypeError, ValueError):
+                    raise ValueError("time gap must be a number") from None
+                if not 0 < value <= 24 * 30:
+                    raise ValueError("time gap must be between 0 and 720 hours")
+                cfg.cluster.time_gap_hours = value
+            if payload.get("distance_km") is not None:
+                try:
+                    value = float(payload["distance_km"])
+                except (TypeError, ValueError):
+                    raise ValueError("distance must be a number") from None
+                if not 0 < value <= 20000:
+                    raise ValueError("distance must be between 0 and 20000 km")
+                cfg.cluster.distance_km = value
+            if "geocode" in payload:
+                provider = str(payload["geocode"])
+                if provider not in ("offline", "nominatim", "none"):
+                    raise ValueError(f"unknown geocode provider {provider!r}")
+                cfg.geocode.provider = provider
+        except (TypeError, ValueError) as exc:
+            self._json(400, {"error": str(exc)})
+            return
+        self._json(200, {"ok": True, "config": self.state.status_dict()["config"]})
+
+    def _run(self, payload: dict) -> None:
+        step = payload.get("step", "plan")
+        state = self.state
+
+        if step == "analyze":
+            self._run_analyze()
+            return
+
+        if step == "dupes":
+            self._run_dupes()
+            return
+
+        if step == "copy":
+            self._run_copy(payload)
+            return
+
+        if step != "plan":
+            self._json(
+                400,
+                {
+                    "error": (
+                        f"'{step}' is not implemented yet. Milestone 1 covers "
+                        "scan, cluster, name and plan only -- no files are copied."
+                    )
+                },
+            )
+            return
+        if state.source is None or state.output is None:
+            self._json(400, {"error": "choose a source and output folder first"})
+            return
+
+        source, output = state.source, state.output
+        config = state.config
+
+        def work(job: Job) -> None:
+            job.say(f"Source: {source}")
+            job.say(f"Output: {output} (nothing will be written)")
+            job.total = state.survey["images"] if state.survey else 0
+
+            def on_step(step_id: str, detail: str) -> None:
+                if step_id.endswith("_done"):
+                    job.completed_steps.append(step_id[: -len("_done")])
+                    job.say(f"  {detail}")
+                else:
+                    job.step = step_id
+                    job.detail = detail
+                    job.say(detail)
+
+            last_report = [0]
+
+            def progress(count: int, path: Path) -> None:
+                job.done_count = count
+                job.current = path.name
+                # A periodic line with the measured rate, so a slow disk is
+                # visible as a slow disk rather than as a hung program.
+                if count - last_report[0] >= 500:
+                    last_report[0] = count
+                    elapsed = (datetime.now() - job.started).total_seconds()
+                    rate = count / elapsed if elapsed else 0
+                    left = (job.total - count) / rate if rate else 0
+                    job.say(
+                        f"  {count}/{job.total} files  "
+                        f"({rate:.0f}/s, about {left / 60:.0f} min left)"
+                    )
+
+            plan = build_plan(
+                source,
+                output,
+                config,
+                progress=progress,
+                on_step=on_step,
+                should_cancel=lambda: job.cancelled,
+            )
+            state.set_plan(plan)
+            job.step = "plan"
+            job.current = ""
+            job.skipped = len(plan.skipped)
+            job.warnings = sum(1 for p in plan.photos if p.warnings)
+            job.detail = (
+                f"{len(plan.events)} event(s), {plan.photo_count} photo(s) planned"
+            )
+            # Say plainly what the metadata actually looked like: whether the
+            # photos carry GPS decides whether place names are possible at all.
+            with_gps = plan.photo_count - plan.missing_gps_count
+            job.say(
+                f"  {with_gps}/{plan.photo_count} photo(s) have GPS; "
+                f"{plan.photo_count - plan.missing_time_count} have an EXIF timestamp"
+            )
+            if job.warnings:
+                job.say(f"  {job.warnings} file(s) had metadata warnings")
+            if plan.missing_gps_count == plan.photo_count and plan.photo_count:
+                job.say(
+                    "  No photo has GPS, so every event is named Unknown_DD_MM. "
+                    "Place lookup cannot help here; name them yourself below."
+                )
+            job.say("Done. Nothing was written -- this is a preview.")
+
+        ok, message = state.start_job("Build plan", work)
+        self._json(200 if ok else 409, {"ok": ok, "message": message})
+
+    def _run_copy(self, payload: dict) -> None:
+        """Copy into the output tree and tag the copies. Requires confirmation."""
+        from .copier import copy_plan
+
+        state = self.state
+        if state.plan is None:
+            self._json(400, {"error": "run the pipeline first, then copy"})
+            return
+        # The one irreversible-ish step in the tool: it creates files. It
+        # does not proceed on a stray click.
+        if payload.get("confirm") != "COPY":
+            self._json(
+                400,
+                {
+                    "error": "Copying needs explicit confirmation.",
+                    "needs_confirmation": True,
+                    "photos": state.plan.photo_count,
+                    "output": str(state.plan.output_root),
+                },
+            )
+            return
+
+        plan = state.plan
+        config = state.config
+
+        def work(job: Job) -> None:
+            job.total = plan.photo_count
+            job.step = "copy"
+
+            def on_progress(done: int, total: int, name: str) -> None:
+                job.done_count = done
+                job.current = name
+
+            stats = copy_plan(
+                plan,
+                config,
+                on_step=lambda m: (setattr(job, "detail", m), job.say(m)),
+                on_progress=on_progress,
+                should_cancel=lambda: job.cancelled,
+            )
+            state.copy_stats = stats
+            job.detail = (
+                f"{stats.copied} copied, {stats.tagged} tagged, "
+                f"{stats.duplicates_copied} duplicates set aside, "
+                f"{stats.verify_failures} verification failures"
+            )
+            job.say(job.detail)
+            job.say("The source folder was not modified.")
+
+        ok, message = state.start_job("Copy library", work)
+        self._json(200 if ok else 409, {"ok": ok, "message": message})
+
+    def _run_dupes(self) -> None:
+        """Find duplicates across the whole plan. Marks only; deletes nothing."""
+        from .dedupe import find_duplicates, mark_duplicates
+
+        state = self.state
+        if state.plan is None:
+            self._json(400, {"error": "run the pipeline first, then find duplicates"})
+            return
+        plan = state.plan
+
+        def work(job: Job) -> None:
+            photos = list(plan.photos)
+            job.total = len(photos)
+            job.step = "dupes"
+            job.say(f"Fingerprinting {len(photos)} photo(s)...")
+
+            def progress(done: int, total: int) -> None:
+                job.done_count = done
+
+            groups, stats = find_duplicates(
+                photos,
+                workers=state.config.scan.scan_workers,
+                progress=progress,
+                should_cancel=lambda: job.cancelled,
+            )
+            marked = mark_duplicates(groups)
+            state.duplicate_groups = groups
+            state.duplicate_stats = stats
+            state.set_plan(plan)
+            job.detail = (
+                f"{stats.exact_groups} exact group(s) ({stats.exact_duplicates} extra "
+                f"copies), {stats.near_groups} near group(s) "
+                f"({stats.near_duplicates} extra), {marked} photo(s) marked"
+            )
+            job.say(job.detail)
+            job.say(
+                "Marked only. Nothing was deleted, and nothing will be: "
+                "duplicates get copied to _duplicates_review/ for you to judge."
+            )
+
+        ok, message = state.start_job("Find duplicates", work)
+        self._json(200 if ok else 409, {"ok": ok, "message": message})
+
+    def _run_analyze(self) -> None:
+        """Analyse photos with the hosted model and name events from the cache."""
+        from .analyze import analyze_plan
+
+        state = self.state
+        if state.plan is None:
+            self._json(400, {"error": "run the pipeline first, then identify"})
+            return
+
+        plan = state.plan
+        config = state.config
+
+        def work(job: Job) -> None:
+            unknown = [e for e in plan.events if not e.place_label]
+            job.total = len(unknown)
+            job.step = "enrich"
+            job.say(f"{len(unknown)} event(s) have no name from GPS.")
+
+            def on_step(message: str) -> None:
+                job.detail = message
+                job.say(message)
+
+            def on_progress(done: int, total: int, label: str) -> None:
+                job.done_count = done
+                job.current = label
+
+            stats = analyze_plan(
+                plan,
+                config,
+                on_step=on_step,
+                on_progress=on_progress,
+                should_cancel=lambda: job.cancelled,
+            )
+            # The plan object was mutated in place; refresh the photo index
+            # and the built-at stamp so the UI reloads it.
+            state.set_plan(plan)
+            job.detail = (
+                f"{stats.named_from_peak} from a verified peak, "
+                f"{stats.named_from_crag} from a crag, "
+                f"{stats.named_from_region} from region, "
+                f"{stats.named_from_activity} from activity, "
+                f"{stats.still_unknown} still unknown"
+            )
+            job.say(job.detail)
+            job.say("Nothing was written -- names are proposals until you commit.")
+
+        ok, message = state.start_job("Analyse and identify", work)
+        self._json(200 if ok else 409, {"ok": ok, "message": message})
+
+    def _image(self, route: str, query: dict[str, list[str]]) -> None:
+        try:
+            photo_id = int(route.rsplit("/", 1)[-1])
+        except ValueError:
+            self._json(400, {"error": "bad id"})
+            return
+        photo = self.state.photo(photo_id)
+        if photo is None:
+            self._json(404, {"error": "no such photo"})
+            return
+        full = (query.get("full") or ["0"])[0] == "1"
+        data = self.state.renderer.render(photo, FULL_SIZE if full else THUMB_SIZE)
+        if data is None:
+            self._json(415, {"error": "cannot render"})
+            return
+        self._send(200, data, "image/jpeg", {"Cache-Control": "private, max-age=3600"})
+
+    def _save(self, payload: dict) -> None:
+        state = self.state
+        if state.plan is None:
+            self._json(400, {"error": "no plan to save"})
+            return
+        events = payload.get("events")
+        if not isinstance(events, list):
+            self._json(400, {"error": "events must be a list"})
+            return
+
+        names: dict[int, str] = {}
+        merges: set[int] = set()
+        for entry in events:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                index = int(entry.get("index"))
+            except (TypeError, ValueError):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if name:
+                names[index] = name
+            if entry.get("merge_into_previous"):
+                merges.add(index)
+
+        target = payload.get("path") or state.default_edits_path
+        try:
+            written = write_edits_file(
+                state.plan, Path(target), names=names, merges=merges
+            )
+        except (UnsafePathError, OSError) as exc:
+            self._json(400, {"error": str(exc)})
+            return
+
+        state.last_saved = str(written)
+        self._json(200, {"ok": True, "path": str(written)})
+
+    def _manifest(self, payload: dict) -> None:
+        state = self.state
+        if state.plan is None:
+            self._json(400, {"error": "no plan to export"})
+            return
+        target = payload.get("path") or "photo_plan.json"
+        try:
+            written = save_manifest(state.plan, Path(target))
+        except (UnsafePathError, OSError) as exc:
+            self._json(400, {"error": str(exc)})
+            return
+        self._json(200, {"ok": True, "path": str(written)})
+
+
+class _AppServer(ThreadingHTTPServer):
+    # HTTPServer sets this True, which on Windows means SO_REUSEADDR lets a
+    # second process bind a port another process is already serving. The
+    # newcomer then prints a URL nobody reaches while the stale server keeps
+    # answering with old code. Refuse to start instead.
+    allow_reuse_address = False
+    daemon_threads = True
+
+
+def make_server(state: AppState, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
+    handler = type("BoundAppHandler", (AppHandler,), {"state": state})
+    # Loopback only. Never 0.0.0.0 -- this exposes the photo library.
+    return _AppServer(("127.0.0.1", port), handler)
+
+
+def serve_app(
+    config: Config,
+    edits_path: Path,
+    source: Optional[Path] = None,
+    output: Optional[Path] = None,
+    port: int = DEFAULT_PORT,
+    open_browser: bool = True,
+) -> None:
+    """Run the control panel until Quit is clicked or Ctrl+C is pressed."""
+    state = AppState(config, edits_path)
+    if source is not None and output is not None:
+        try:
+            state.source, state.output = check_paths(source, output)
+            state.survey = survey_source(state.source, config.scan)
+        except (UnsafePathError, OSError) as exc:
+            log.warning("Ignoring prefilled paths: %s", exc)
+            state.source = state.output = None
+
+    try:
+        server = make_server(state, port)
+    except OSError as exc:
+        log.error(
+            "Could not listen on port %d: %s. "
+            "Something else may be using it; pass --port to pick another.",
+            port,
+            exc,
+        )
+        raise SystemExit(2) from None
+
+    host, bound = server.server_address[:2]
+    url = f"http://{host}:{bound}/?t={state.token}"
+
+    print("\n  Photo Organizer is running. Nothing has been written.", flush=True)
+    print(f"    {url}", flush=True)
+    print("  The token in that link is what makes it yours; it dies with this run.", flush=True)
+    print("  Click Quit in the page, or press Ctrl+C here, to stop.\n", flush=True)
+
+    if not state.renderer.available:
+        log.warning("Pillow is not installed, so thumbnails will not render.")
+
+    if open_browser:
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  Stopped.", flush=True)
+    finally:
+        server.server_close()
