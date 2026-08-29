@@ -117,6 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ui.add_argument(
+        "--require-token",
+        action="store_true",
+        help=(
+            "Require a secret token in the URL. Off by default: the app "
+            "already refuses any request that is not from this machine and "
+            "not from its own page, and a token cannot stop a program "
+            "running as you, which can simply read the token file."
+        ),
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=DEFAULT_PORT,
@@ -249,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
             port=args.port,
             open_browser=not args.no_browser,
+            require_token=args.require_token,
         )
         return 0
 

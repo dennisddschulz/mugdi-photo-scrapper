@@ -216,6 +216,9 @@ class AppState:
         self.suggested_source = config.paths.default_source
         self.suggested_output = config.paths.default_output
         self.token = load_or_create_token()
+        # Off by default: see the module note. The Host and Origin
+        # checks are what actually protect these routes.
+        self.require_token = False
         self.renderer = ThumbnailRenderer()
         self.source: Optional[Path] = None
         self.output: Optional[Path] = None
@@ -483,6 +486,10 @@ class AppHandler(BaseHTTPRequestHandler):
         )
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # Never cache. This is a local control panel whose page and status
+        # reflect live state; a browser reusing an old copy showed stale
+        # defaults and looked like the settings had been lost.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -503,6 +510,11 @@ class AppHandler(BaseHTTPRequestHandler):
         the query string, the cookie set on that first visit, or an explicit
         header from the page's own fetch calls.
         """
+        if not getattr(self.state, "require_token", False):
+            # The Host and Origin checks carry the security here. A token in
+            # the URL cannot stop a local program that can read the token
+            # file, and it is not what stops a web page: Origin is.
+            return True
         candidates = [
             (query.get("t") or [""])[0],
             self.headers.get("X-Photo-Organizer-Token", ""),
@@ -520,6 +532,24 @@ class AppHandler(BaseHTTPRequestHandler):
             if name == COOKIE_NAME:
                 return value
         return ""
+
+    def _host_allowed(self) -> bool:
+        """Refuse any Host header that is not a loopback name.
+
+        This is the DNS-rebinding defence, and it is the one that matters
+        once there is no token. An attacker can point a hostname they own at
+        127.0.0.1; the browser then treats their page as same-origin with
+        this server, and Origin checks pass because the origin genuinely is
+        theirs. What does not match is the Host they had to send to get
+        here, so that is what gets checked.
+        """
+        host = self.headers.get("Host", "")
+        # Strip the port, coping with the [::1]:8080 form.
+        if host.startswith("["):
+            name = host.partition("]")[0].lstrip("[")
+        else:
+            name = host.partition(":")[0]
+        return name.lower() in ("localhost", "127.0.0.1", "::1", "")
 
     def _same_origin(self) -> bool:
         """Reject requests a browser says came from somewhere else.
@@ -562,6 +592,11 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         route = parsed.path
+
+        if not self._host_allowed():
+            self._send(403, b"Forbidden: not a loopback host.",
+                       "text/plain; charset=utf-8")
+            return
 
         if route == "/":
             if not self._authorized(query):
@@ -619,6 +654,9 @@ class AppHandler(BaseHTTPRequestHandler):
         # Origin first: these are the routes that scan drives and copy files,
         # so a request a browser itself labels as coming from another site is
         # refused before the token is even considered.
+        if not self._host_allowed():
+            self._json(403, {"error": "not a loopback host"})
+            return
         if not self._same_origin():
             self._json(403, {"error": "cross-site request refused"})
             return
@@ -1147,9 +1185,11 @@ def serve_app(
     output: Optional[Path] = None,
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
+    require_token: bool = False,
 ) -> None:
     """Run the control panel until Quit is clicked or Ctrl+C is pressed."""
     state = AppState(config, edits_path)
+    state.require_token = require_token
     if source is not None and output is not None:
         try:
             state.source, state.output = check_paths(source, output)
@@ -1178,20 +1218,16 @@ def serve_app(
             target=v6_server.serve_forever, name="photo-organizer-v6", daemon=True
         ).start()
 
-    url = f"http://{host}:{bound}/?t={state.token}"
-    plain = f"http://{host}:{bound}/"
+    plain = f"http://localhost:{bound}/"
+    url = f"{plain}?t={state.token}" if state.require_token else plain
 
     print("\n  Photo Organizer is running. Nothing has been written.", flush=True)
     print(f"    {url}", flush=True)
-    print(f"  After the first visit, {plain} works on its own -- bookmark that.",
-          flush=True)
-    if v6_server is not None:
-        print(f"  http://localhost:{bound}/?t={state.token} works too.", flush=True)
-        print("  (Each hostname needs the token once; the cookie is per-host.)",
+    if not state.require_token:
+        print(f"    http://127.0.0.1:{bound}/   works too -- bookmark either.",
               flush=True)
-    print("  The token stays the same between runs. It is what stops another",
-          flush=True)
-    print("  program, or a web page you have open, driving this app.", flush=True)
+        print("  Reachable only from this machine. Requests from a web page,", flush=True)
+        print("  or under any other hostname, are refused.", flush=True)
     print("  Click Quit in the page, or press Ctrl+C here, to stop.\n", flush=True)
 
     if not state.renderer.available:

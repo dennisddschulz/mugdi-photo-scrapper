@@ -105,31 +105,37 @@ when you ask and stops when you click Quit, and it binds loopback only.
 
 `start.bat --port 8090` if something already holds 8080.
 
-### Why there is a token, and why the URL is still stable
+### Configuration
 
-`127.0.0.1` is **not** private. Any program on the machine can reach it, and
-so can any web page you have open — a browser will happily send a request to
-`http://127.0.0.1:8080` from a page on the internet. This app browses
-directories and copies files, so an unauthenticated `POST /api/run` from a
-random page would be a real hazard.
+A `config.toml` in the working directory, the project directory, or
+`~/.photo_organizer/` is **loaded automatically** — no `--config` flag. The
+terminal says which file is in effect. `config.example.toml` documents every
+option; copy it to `config.toml` and edit.
 
-The token stops that. It used to be regenerated per run, which meant a new URL
-every time and nothing you could bookmark. Now:
+### What protects the app, since there is no token in the URL
 
-- the token is **stored** in `~/.photo_organizer/ui_token` and reused, so the
-  URL never changes;
-- the first visit sets it as an `HttpOnly; SameSite=Strict` cookie, so
-  afterwards the **bare `http://127.0.0.1:8080/` works** — bookmark that;
-- state-changing requests additionally check `Origin`, so a page on another
-  site is refused **even if it somehow has the token**.
+`127.0.0.1` is not private: every program on the machine can reach it, and so
+can any web page you have open. These routes browse directories and copy
+files, so that matters. Three checks, none of which need a token:
 
-Verified end to end: bare URL 200, no credentials 403, and a cross-site POST
-carrying a valid cookie 403 `cross-site request refused`.
+| Check | Stops |
+| --- | --- |
+| **Loopback bind only** (`::1` and `127.0.0.1`) | anything on the network. Verified refused on the LAN address. |
+| **`Host` must be a loopback name** | DNS rebinding — an attacker pointing their own hostname at `127.0.0.1` so the browser treats their page as same-origin |
+| **`Origin` must be this server** on state-changing requests | a web page you have open driving the app. A browser sets `Origin` itself; a page cannot forge it. |
 
-Cookies are per-hostname, so `localhost` and `127.0.0.1` each need the
-tokened URL once. Pick one and stay with it.
+A URL token was **dropped as the default** because it protected less than it
+appeared to: any program running as you can read `~/.photo_organizer/ui_token`
+just as the app does, so it never defended against local software, and the
+web-page threat is handled by `Origin` whether or not a token exists. What it
+did reliably was make the URL unbookmarkable.
 
-To rotate it, delete `~/.photo_organizer/ui_token` and restart.
+If you want it anyway — a shared machine with other user accounts, where the
+loopback interface is genuinely shared — `--require-token` restores it.
+
+Verified against the running server: plain URLs 200 on `localhost`,
+`127.0.0.1` and `[::1]`; cross-site POST 403; rebound `Host` 403; LAN address
+refused.
 
 ### Stopping it
 

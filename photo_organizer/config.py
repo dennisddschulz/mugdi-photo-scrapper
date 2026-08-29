@@ -7,9 +7,10 @@ tuned (R-N5) without touching logic.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 try:  # Python 3.11+
     import tomllib
@@ -223,6 +224,33 @@ class NamingConfig:
     include_activity: bool = True
 
 
+# Where a config file is looked for when none is named on the command line,
+# in order. The working directory first, so a project folder can carry its
+# own settings; the home directory last, as the per-machine fallback.
+log = logging.getLogger(__name__)
+
+CONFIG_NAMES = ("config.toml", "photo_organizer.toml")
+
+
+def find_config() -> Optional[Path]:
+    """The config file to use when none was named, or None."""
+    roots = [
+        Path.cwd(),
+        Path(__file__).resolve().parent.parent,
+        Path("~/.photo_organizer").expanduser(),
+    ]
+    seen: set[Path] = set()
+    for root in roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        for name in CONFIG_NAMES:
+            candidate = root / name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 @dataclass
 class Config:
     paths: PathsConfig = field(default_factory=PathsConfig)
@@ -232,16 +260,29 @@ class Config:
     scan: ScanConfig = field(default_factory=ScanConfig)
     naming: NamingConfig = field(default_factory=NamingConfig)
 
+    # Set by load() so the UI can say which file is in effect. Empty
+    # means "built-in defaults only".
+    loaded_from: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
-        """Build a Config, overlaying a TOML file onto the defaults."""
+        """Build a Config, overlaying a TOML file onto the defaults.
+
+        With no path given, look for one in the obvious places rather than
+        silently ignoring a config.toml sitting next to the program. Passing
+        a path explicitly always wins.
+        """
         cfg = cls()
         if path is None:
+            path = find_config()
+        if path is None:
             return cfg
+        log.info("Using configuration from %s", path)
         cfg.apply_overrides(read_toml(path))
+        cfg.loaded_from = str(path)
         return cfg
 
     def apply_overrides(self, data: dict[str, Any]) -> None:

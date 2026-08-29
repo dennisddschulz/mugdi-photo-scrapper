@@ -395,17 +395,20 @@ and `127.0.0.1`. `localhost` resolves to `::1` first on Windows, so an
 IPv4-only bind makes the hostname everybody types simply fail. Neither
 socket is reachable off the machine; binding `0.0.0.0` or `""` is forbidden.
 
-**R-U2** The token is **persistent** (`~/.photo_organizer/ui_token`), so the
-URL is stable and bookmarkable. A per-run token was the reason to want the
-protection removed, which is the worst of the three outcomes. Deleting the
-file rotates it.
+**R-U2** The control panel requires **no token by default**. A URL token
+does not defend against local software -- any program running as the user can
+read the token file -- and it is not what stops a web page, which is R-U4.
+Its reliable effect was an unbookmarkable URL. `--require-token` restores it
+for a genuinely shared machine.
 
-**R-U3** After the first tokened visit the token is held in an `HttpOnly;
-SameSite=Strict` cookie, so the bare URL works thereafter. It is accepted from
-query string, cookie, or `X-Photo-Organizer-Token` header.
+**R-U3** Every request must carry a **loopback `Host`** (`localhost`,
+`127.0.0.1`, `::1`). This is the DNS-rebinding defence and it is what makes
+R-U2 safe: an attacker can resolve a hostname they own to `127.0.0.1`, and
+`Origin` will then legitimately be theirs, but the `Host` they had to send
+gives it away.
 
-**R-U4** State-changing requests additionally verify `Origin`, and refuse any
-value that is not this server. A browser sets `Origin` itself and a page
+**R-U4** State-changing requests verify `Origin`, and refuse any value that
+is not this server. A browser sets `Origin` itself and a page
 cannot forge it, so this holds even if the token leaks. A missing `Origin`
 means a non-browser client and is allowed.
 
@@ -446,3 +449,11 @@ network call).
 Throughout: digiKam is the final human-facing tool for dedup confirmation, face
 recognition, tag/rating editing, and browsing. This tool feeds it; it does not
 replace it.
+
+**R-U5** A `config.toml` found in the working directory, the program
+directory, or `~/.photo_organizer/` is loaded without being named on the
+command line, and the terminal reports which file is in effect. Settings that
+exist only as code defaults are invisible and look lost.
+
+**R-U6** The control panel sends `Cache-Control: no-store`. It reflects live
+state, and a cached copy showed stale values that looked like lost settings.

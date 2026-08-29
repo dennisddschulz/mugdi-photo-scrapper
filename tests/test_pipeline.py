@@ -628,14 +628,62 @@ class TestWebApp(unittest.TestCase):
     def test_binds_loopback_only(self):
         self.assertEqual(self.server.server_address[0], "127.0.0.1")
 
-    def test_every_route_requires_the_token(self):
+    def test_no_token_is_needed_by_default(self):
+        """A token in the URL protected nothing a local program could not
+        defeat by reading the token file, and made the URL unbookmarkable."""
         for route in ("/", "/api/status", "/api/plan", "/api/browse"):
             with self.subTest(route=route):
-                self.assertEqual(self.call(route, token=False)[0], 403)
+                self.assertEqual(self.call(route, token=False)[0], 200)
 
-    def test_rejects_a_wrong_token(self):
+    def test_the_token_can_still_be_required(self):
+        self.state.require_token = True
+        self.addCleanup(setattr, self.state, "require_token", False)
+        self.assertEqual(self.call("/api/status", token=False)[0], 403)
+        self.assertEqual(self.call("/api/status")[0], 200)
+
+    def test_a_wrong_token_is_refused_when_required(self):
+        self.state.require_token = True
+        self.addCleanup(setattr, self.state, "require_token", False)
         status, _ = self.call(f"/api/status?t=wrong{self.state.token[6:]}", token=False)
         self.assertEqual(status, 403)
+
+    def test_a_rebound_hostname_is_refused(self):
+        """The DNS-rebinding defence, and the reason dropping the token is
+        safe: an attacker can point their own hostname at 127.0.0.1, but
+        cannot change the Host header the browser then sends."""
+        import urllib.error
+        import urllib.request
+
+        for host in ("evil.example.com", "attacker.test:8080"):
+            with self.subTest(host=host):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{self.port}/api/status",
+                    headers={"Host": host},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(req, timeout=5)
+                self.assertEqual(caught.exception.code, 403)
+
+    def test_loopback_hostnames_are_accepted(self):
+        import urllib.request
+
+        for host in (f"localhost:{self.port}", f"127.0.0.1:{self.port}",
+                     f"[::1]:{self.port}"):
+            with self.subTest(host=host):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{self.port}/api/status",
+                    headers={"Host": host},
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+
+    def test_the_page_is_never_cached(self):
+        """A cached page showed stale defaults and looked like lost settings."""
+        import urllib.request
+
+        url = f"http://127.0.0.1:{self.port}/"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            self.assertIn("no-store", resp.headers.get("Cache-Control", ""))
 
     def test_page_embeds_the_token_not_the_placeholder(self):
         status, body = self.call("/")
@@ -2226,7 +2274,7 @@ class TestCrossSiteProtection(unittest.TestCase):
             from photo_organizer.webapp import AppHandler
 
             self.headers = headers
-            self.state = types.SimpleNamespace(token=token)
+            self.state = types.SimpleNamespace(token=token, require_token=True)
             self.server = types.SimpleNamespace(server_address=("127.0.0.1", port))
             self._authorized = AppHandler._authorized.__get__(self)
             self._cookie_token = AppHandler._cookie_token.__get__(self)
