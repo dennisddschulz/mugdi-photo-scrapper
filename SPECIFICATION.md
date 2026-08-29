@@ -523,3 +523,9 @@ unrelated photographs together -- dark night shots hash close to each other.
 Measured distribution: 511 groups under a minute, 4 under an hour, none
 between an hour and 30 days, 13 over a month. A photo with no timestamp is
 still allowed in, so a re-encoded copy that lost its EXIF is not missed.
+
+**R-U7** Credentials may be supplied in a `.env` file next to the program,
+loaded at startup from the working directory, the program directory or
+`~/.photo_organizer/`. A variable already present in the environment wins
+over the file. The file must be gitignored, and its values must never be
+logged.

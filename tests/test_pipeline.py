@@ -2764,5 +2764,89 @@ class TestNearDuplicateTimeWindow(unittest.TestCase):
         self.assertFalse(_close_in_time([early, late], candidate, 24 * 3600))
 
 
+class TestDotEnv(unittest.TestCase):
+    """A .env beside the program, instead of setx into the registry."""
+
+    def _write(self, body):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        path = root / ".env"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def _clean(self, *names):
+        import os as _os
+
+        for name in names:
+            _os.environ.pop(name, None)
+            self.addCleanup(_os.environ.pop, name, None)
+
+    def test_a_key_is_read_from_the_file(self):
+        import os as _os
+
+        from photo_organizer.config import load_dotenv
+
+        self._clean("PO_TEST_KEY")
+        load_dotenv(self._write("PO_TEST_KEY=abc123" + chr(10)))
+        self.assertEqual(_os.environ["PO_TEST_KEY"], "abc123")
+
+    def test_an_exported_variable_wins_over_the_file(self):
+        """An explicit export is deliberate; a file must not override it."""
+        import os as _os
+
+        from photo_organizer.config import load_dotenv
+
+        self._clean("PO_TEST_KEY")
+        _os.environ["PO_TEST_KEY"] = "from-the-environment"
+        load_dotenv(self._write("PO_TEST_KEY=from-the-file" + chr(10)))
+        self.assertEqual(_os.environ["PO_TEST_KEY"], "from-the-environment")
+
+    def test_quotes_comments_and_export_are_handled(self):
+        import os as _os
+
+        from photo_organizer.config import load_dotenv
+
+        self._clean("PO_A", "PO_B", "PO_C")
+        body = chr(10).join([
+            "# a comment",
+            "",
+            "PO_A=""quoted""",
+            "PO_B='single'",
+            "export PO_C=exported",
+        ])
+        load_dotenv(self._write(body))
+        self.assertEqual(_os.environ["PO_A"], "quoted")
+        self.assertEqual(_os.environ["PO_B"], "single")
+        self.assertEqual(_os.environ["PO_C"], "exported")
+
+    def test_a_value_containing_equals_survives(self):
+        """Base64 and token formats routinely contain an equals sign."""
+        import os as _os
+
+        from photo_organizer.config import load_dotenv
+
+        self._clean("PO_TOKEN")
+        load_dotenv(self._write("PO_TOKEN=abc=def==" + chr(10)))
+        self.assertEqual(_os.environ["PO_TOKEN"], "abc=def==")
+
+    def test_a_missing_file_is_not_an_error(self):
+        from photo_organizer.config import load_dotenv
+
+        self.assertIsNone(load_dotenv(Path("nowhere-at-all") / ".env"))
+
+    def test_the_value_is_never_logged(self):
+        """The file exists precisely to hold credentials."""
+        from photo_organizer.config import load_dotenv
+
+        self._clean("PO_SECRET")
+        with self.assertLogs("photo_organizer.config", level="INFO") as caught:
+            load_dotenv(self._write("PO_SECRET=hunter2-do-not-print" + chr(10)))
+        self.assertNotIn("hunter2", " ".join(caught.output))
+
+    def test_the_env_file_is_gitignored(self):
+        """It holds a credential; committing it must be impossible."""
+        ignore = Path(".gitignore").read_text(encoding="utf-8")
+        self.assertIn(".env", ignore.split())
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

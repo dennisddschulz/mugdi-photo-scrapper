@@ -240,6 +240,61 @@ class NamingConfig:
 # own settings; the home directory last, as the per-machine fallback.
 log = logging.getLogger(__name__)
 
+# A .env is looked for in the same places as config.toml.
+ENV_NAMES = (".env",)
+
+
+def load_dotenv(path: Optional[Path] = None) -> Optional[Path]:
+    """Read KEY=VALUE lines from a .env into the environment.
+
+    Returns the file used, or None. Values already present in the
+    environment are never overwritten: an explicitly exported variable is a
+    deliberate act and must beat a file.
+
+    Never logs a value -- the whole point of the file is that it holds
+    credentials.
+    """
+    import os
+
+    candidates = [path] if path else []
+    if not candidates:
+        for root in (Path.cwd(),
+                     Path(__file__).resolve().parent.parent,
+                     Path("~/.photo_organizer").expanduser()):
+            candidates.extend(root / name for name in ENV_NAMES)
+
+    for candidate in candidates:
+        if candidate is None or not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            log.warning("Could not read %s: %s", candidate, exc)
+            continue
+        loaded = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.lower().startswith("export "):
+                line = line[7:].lstrip()
+            name, sep, value = line.partition("=")
+            if not sep:
+                continue
+            name = name.strip()
+            value = value.strip()
+            # Strip one layer of matching quotes, so both KEY=abc and
+            # KEY="abc" work -- people write both.
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if name and name not in os.environ:
+                os.environ[name] = value
+                loaded += 1
+        log.info("Loaded %d setting(s) from %s", loaded, candidate)
+        return candidate
+    return None
+
+
 CONFIG_NAMES = ("config.toml", "photo_organizer.toml")
 
 

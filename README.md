@@ -196,14 +196,22 @@ running in the background and holds the port:
 powershell -Command "Get-NetTCPConnection -LocalPort 8080 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"
 ```
 
-For analysis you need a Gemini API key:
+For analysis you need a Gemini API key. Put it in a **`.env`** file beside
+the program:
 
 ```bash
-setx GEMINI_API_KEY "your-key"
+GEMINI_API_KEY=your-key-here
 ```
 
-`setx` writes it permanently but does **not** affect terminals that are
-already open — start a new one, and restart the server, or it will not see it.
+It is loaded automatically at startup, from the working directory, the
+program directory, or `~/.photo_organizer/`. `.env` is in `.gitignore` and a
+test asserts it stays there.
+
+An environment variable already set **wins** over the file — exporting a
+different key for one run is deliberate and a file should not override it.
+`setx GEMINI_API_KEY "..."` still works if you prefer, with the caveat that it
+does not affect terminals that are already open, which is how a key that *is*
+set can still look missing.
 
 The control panel says which state it is in next to the Identify button
 (*"Gemini API key found."* or a warning). That check exists because the only

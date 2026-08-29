@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .config import Config
+from .config import Config, load_dotenv
 from .manifest import (
     apply_edits,
     guard_write_target,
@@ -229,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        # Before Config.load, so a key in .env is visible to it.
+        load_dotenv()
         config = Config.load(args.config)
     except (OSError, ValueError, RuntimeError) as exc:
         log.error("Config error: %s", exc)
