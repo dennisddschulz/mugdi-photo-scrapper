@@ -3659,5 +3659,58 @@ class TestOcrRobustness(unittest.TestCase):
         self.assertGreater(TEXT_LIKELY_WORDS, 10)
         self.assertLess(TEXT_LIKELY_WORDS, 16)
 
+class TestOutputTargetGuard(unittest.TestCase):
+    """The guard checked source against output, and nothing about output."""
+
+    def _check(self, out):
+        from photo_organizer.scan import check_output_target
+
+        check_output_target(Path(out))
+
+    def test_a_drive_root_is_refused(self):
+        """A library scattered across C:\\ cannot be undone in one piece."""
+        from photo_organizer.scan import UnsafePathError
+
+        with self.assertRaises(UnsafePathError):
+            self._check("C:" + chr(92))
+
+    def test_the_operating_system_is_refused(self):
+        from photo_organizer.scan import UnsafePathError
+
+        for bad in ("C:/Windows", "C:/Windows/System32/photos",
+                    "C:/Program Files", "C:/ProgramData/lib"):
+            with self.subTest(path=bad):
+                with self.assertRaises(UnsafePathError):
+                    self._check(bad)
+
+    def test_a_temporary_directory_is_still_allowed(self):
+        """Windows puts temp directories under AppData/Local/Temp.
+        Forbidding AppData rejected every legitimate temporary output and
+        broke fifteen tests -- a guard that overreaches gets removed."""
+        self._check(tempfile.mkdtemp())
+
+    def test_the_home_directory_itself_is_refused(self):
+        from photo_organizer.scan import UnsafePathError
+
+        with self.assertRaises(UnsafePathError):
+            self._check(str(Path.home()))
+
+    def test_a_folder_inside_home_is_fine(self):
+        """The rule is about containers, not about ownership."""
+        self._check(str(Path.home() / "Pictures" / "Library"))
+
+    def test_an_ordinary_folder_is_fine(self):
+        self._check("C:/FotosTempOrganized")
+        self._check("D:/Organised")
+
+    def test_check_paths_applies_it(self):
+        """Every route into the copier goes through check_paths."""
+        from photo_organizer.scan import UnsafePathError, check_paths
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        with self.assertRaises(UnsafePathError):
+            check_paths(root, Path("C:" + chr(92)))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

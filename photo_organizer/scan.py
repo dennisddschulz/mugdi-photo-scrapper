@@ -37,11 +37,67 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
+# Directories that must never be an output. A drive root, the operating
+# system, installed software, and the home directory itself: writing a
+# library into any of them is a mistake, and anything that ever clears the
+# output would be a disaster there.
+#
+# The list is deliberately about CONTAINERS, not about being system-owned.
+# C:/Users/dsz/Photos is a fine place for a library; C:/Users/dsz is not.
+# NOT "appdata": Windows puts temporary directories under
+# AppData/Local/Temp, so forbidding it rejected every legitimate temporary
+# output and broke fifteen tests. The harm of a library there is mild; the
+# harm of this list being wrong is that the guard gets removed.
+FORBIDDEN_OUTPUT_NAMES = (
+    "windows", "program files", "program files (x86)", "programdata",
+    "system32", "$recycle.bin",
+)
+
+
+def check_output_target(output: Path) -> None:
+    """Refuse an output that would scatter a library somewhere terrible.
+
+    Raises UnsafePathError. Called from check_paths, so every route into
+    the copier goes through it.
+    """
+    resolved = _resolve(output)
+
+    # A drive root, or a filesystem root.
+    if resolved.parent == resolved:
+        raise UnsafePathError(
+            f"Output cannot be a drive root ({resolved}). Choose a folder "
+            "inside it, so the library is contained and can be deleted "
+            "again in one piece."
+        )
+
+    parts = [part.lower().rstrip("\\/") for part in resolved.parts]
+    for forbidden in FORBIDDEN_OUTPUT_NAMES:
+        if forbidden in parts:
+            raise UnsafePathError(
+                f"Output is inside {forbidden!r} ({resolved}). Choose an "
+                "ordinary folder: a photo library does not belong in the "
+                "operating system or in application data."
+            )
+
+    # The home directory itself, rather than a folder inside it.
+    try:
+        home = _resolve(Path.home())
+        if resolved == home:
+            raise UnsafePathError(
+                f"Output cannot be your home directory ({resolved}). Choose "
+                "a folder inside it, such as "
+                f"{home / 'Photos'}, so the library stays in one place."
+            )
+    except (OSError, RuntimeError):
+        pass
+
+
 def check_paths(source: Path, output: Path) -> tuple[Path, Path]:
     """Validate source/output and return them resolved.
 
-    Refuses the two layouts that could put written files inside the source
-    tree, or feed our own output back in as input on a later run.
+    Three things are refused: an output that is somewhere no library should
+    go, a layout that could put written files inside the source tree, and one
+    that would feed our own output back in as input on a later run.
     """
     source = _resolve(source)
     output = _resolve(output)
@@ -50,6 +106,11 @@ def check_paths(source: Path, output: Path) -> tuple[Path, Path]:
         raise UnsafePathError(f"Source does not exist: {source}")
     if not source.is_dir():
         raise UnsafePathError(f"Source is not a directory: {source}")
+
+    # What the output IS, before what it is relative to the source. The
+    # relationship checks below say nothing about writing a library into
+    # C:/Windows, which they happily allowed.
+    check_output_target(output)
 
     if source == output:
         raise UnsafePathError(
