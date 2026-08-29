@@ -46,7 +46,10 @@ CANDIDATE_BINARIES = (
 # Measured: 1000px reads a guidebook page cleanly at about 1.1 photos/second.
 # 1600px was slower AND read less -- accuracy is not monotonic in resolution,
 # which this project has now learned twice.
-OCR_EDGE = 1000
+# 1400, not 1000. The page that was stored sideways gave 3 words upright at
+# 1000px -- too few to look like text at all -- and 16 at 1400px. Reading it
+# at all depended on this.
+OCR_EDGE = 1400
 
 # Alpine guidebooks are written in these.
 LANGUAGES = "eng+deu+fra+ita"
@@ -86,35 +89,118 @@ def unavailable_reason() -> str:
     )
 
 
-def read_text(path: Path, edge: int = OCR_EDGE, timeout: int = 60) -> str:
-    """The text in one photo, or an empty string."""
-    binary = find_tesseract()
-    if binary is None:
-        return ""
-    from PIL import Image
+# How many real words a pass has to find before it is worth trying the
+# photo at other angles. Photographs of rock produce a handful of gibberish
+# tokens; a page produces many more.
+# Measured at 1400px on real photos: the two topo pages of one event gave
+# 16 and 49 real words upright, while photographs of rock gave 0, 2, 2, 3,
+# 7, 9, 10 -- and one gave 27. The sets overlap, so this cannot be a
+# classifier. It does not need to be: escalating on a rock photo costs a few
+# seconds, and the gazetteer throws away the gibberish that comes back.
+TEXT_LIKELY_WORDS = 12
+
+# Page-segmentation modes worth trying. 6 assumes a uniform block of text,
+# 3 lets Tesseract find the layout itself; measured, each reads pages the
+# other misses.
+PSM_MODES = (6, 3)
+
+# Cameras do not always record which way up a photo is: the topo that could
+# not be read has an EXIF orientation of 0, meaning unset.
+ROTATIONS = (0, 270, 180, 90)
+
+
+def _run_tesseract(binary: str, path: Path, edge: int, psm: int,
+                   rotation: int, timeout: int) -> str:
+    from PIL import Image, ImageOps
 
     tmp = None
     try:
         with Image.open(path) as img:
-            # draft() decodes JPEGs at reduced size, which is most of the
-            # speed. Greyscale because Tesseract wants it anyway.
+            # Honour the orientation tag when there is one. Often there is
+            # not, which is why rotations are tried as well.
+            img = ImageOps.exif_transpose(img) or img
             img.draft("L", (edge, edge))
             grey = img.convert("L")
             grey.thumbnail((edge, edge))
+            if rotation:
+                grey = grey.rotate(rotation, expand=True)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
                 tmp = Path(handle.name)
             grey.save(tmp)
         result = subprocess.run(
-            [binary, str(tmp), "stdout", "-l", LANGUAGES, "--psm", "6"],
+            [binary, str(tmp), "stdout", "-l", LANGUAGES, "--psm", str(psm)],
             capture_output=True, timeout=timeout,
         )
         return result.stdout.decode("utf-8", "replace")
     except (OSError, subprocess.SubprocessError) as exc:
-        log.debug("OCR failed on %s: %s", path, exc)
+        log.debug("OCR failed on %s (psm %s, rot %s): %s", path, psm, rotation, exc)
         return ""
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
+
+
+def word_count(text: str) -> int:
+    """Words long enough to be words, as a proxy for "this holds text"."""
+    import re
+
+    return len(re.findall(r"[A-Za-z\u00C0-\u024F]{4,}", text))
+
+
+def read_text(path: Path, edge: int = OCR_EDGE, timeout: int = 60) -> str:
+    """One cheap pass. Enough for a page that is the right way up."""
+    binary = find_tesseract()
+    if binary is None:
+        return ""
+    return _run_tesseract(binary, path, edge, PSM_MODES[0], 0, timeout)
+
+
+def read_text_hard(
+    path: Path,
+    peak_index=None,
+    countries: Sequence[str] = (),
+    edge: int = OCR_EDGE,
+    timeout: int = 60,
+) -> tuple:
+    """Read a photo, trying harder when it looks like it holds text.
+
+    Returns (text, names). Stops as soon as a specific place name appears --
+    there is nothing to gain from reading the rest of a page whose subject
+    is already known.
+
+    The escalation only happens for photos that look like text. Rock
+    produces gibberish at every angle, and trying eight passes on all of it
+    would make this unaffordable.
+    """
+    binary = find_tesseract()
+    if binary is None:
+        return "", ()
+
+    def names_in(text: str) -> tuple:
+        if not text.strip() or peak_index is None or not len(peak_index):
+            return ()
+        return tuple(
+            peak.name
+            for peak in peak_index.names_in_text(text, countries=countries or None)
+        )
+
+    collected: list[str] = []
+    best = 0
+    for rotation in ROTATIONS:
+        for psm in PSM_MODES:
+            text = _run_tesseract(binary, path, edge, psm, rotation, timeout)
+            collected.append(text)
+            best = max(best, word_count(text))
+            found = names_in(text)
+            if any(is_specific_enough(name) for name in found):
+                return "\n".join(collected), found
+        # After the upright attempts, only keep going if something in this
+        # photo actually looks like writing.
+        if rotation == 0 and best < TEXT_LIKELY_WORDS:
+            break
+
+    joined = "\n".join(collected)
+    return joined, names_in(joined)
 
 
 def specificity(name: str) -> tuple:
@@ -140,12 +226,49 @@ def is_specific_enough(name: str) -> bool:
     return len(words) >= 2 or len(name) >= 11
 
 
+def scan_for_text(
+    photos: Sequence,
+    max_photos: int = 0,
+    should_cancel: Optional[Callable[[], bool]] = None,
+    progress: Optional[Callable[[int, int, Path], None]] = None,
+) -> list[tuple]:
+    """One cheap pass over an event, ranking photos by how much text they hold.
+
+    The expensive reading -- every rotation, both segmentation modes -- costs
+    about eight seconds a photo, which is unaffordable across an event. One
+    upright pass costs one second and is enough to say which few photos are
+    worth that. Returns [(words, photo)], most text first.
+    """
+    binary = find_tesseract()
+    if binary is None:
+        return []
+    candidates = [
+        p for p in photos
+        if getattr(p, "duplicate_role", None) in (None, "keep")
+        and getattr(p, "reject_reason", None) is None
+    ] or list(photos)
+    if max_photos:
+        candidates = candidates[:max_photos]
+
+    ranked: list[tuple] = []
+    for position, photo in enumerate(candidates, start=1):
+        if should_cancel is not None and should_cancel():
+            break
+        if progress:
+            progress(position, len(candidates), photo.source_path)
+        text = _run_tesseract(binary, photo.source_path, OCR_EDGE, PSM_MODES[0], 0, 60)
+        ranked.append((word_count(text), photo))
+    ranked.sort(key=lambda pair: -pair[0])
+    return ranked
+
+
 def read_event(
     photos: Sequence,
     peak_index,
     countries: Sequence[str] = (),
-    stop_after_hit: bool = False,
+    stop_after_hit: bool = True,
     max_photos: int = 0,
+    deep_photos: int = 6,
     should_cancel: Optional[Callable[[], bool]] = None,
     progress: Optional[Callable[[int, int, Path], None]] = None,
 ) -> list[OcrResult]:
@@ -161,30 +284,24 @@ def read_event(
     of a page says the same thing the page did.
     """
     results: list[OcrResult] = []
-    candidates = [
-        p for p in photos
-        if getattr(p, "duplicate_role", None) in (None, "keep")
-        and getattr(p, "reject_reason", None) is None
-    ] or list(photos)
-    if max_photos:
-        candidates = candidates[:max_photos]
+
+    # Cheap pass first, to find out WHICH photos are worth reading properly.
+    ranked = scan_for_text(photos, max_photos=max_photos,
+                           should_cancel=should_cancel, progress=progress)
+    candidates = [photo for words, photo in ranked if words >= 3][:deep_photos]
+    if not candidates and ranked:
+        candidates = [ranked[0][1]]
 
     for position, photo in enumerate(candidates, start=1):
         if should_cancel is not None and should_cancel():
             break
         if progress:
             progress(position, len(candidates), photo.source_path)
-        text = read_text(photo.source_path)
+        text, names = read_text_hard(
+            photo.source_path, peak_index, countries=countries
+        )
         if not text.strip():
             continue
-        names = ()
-        if peak_index is not None and len(peak_index):
-            names = tuple(
-                peak.name
-                for peak in peak_index.names_in_text(
-                    text, countries=countries or None
-                )
-            )
         result = OcrResult(path=photo.source_path, text=text, names=names)
         results.append(result)
         if names:

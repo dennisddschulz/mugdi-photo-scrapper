@@ -650,3 +650,14 @@ nearly named "Aiguille".
 The gap must be at most a night, the trip must fit inside `trip_max_days`, and
 one event must know its place while the other does not contradict it. Merging
 on time alone joined 106 unrelated events.
+
+**R-F24** OCR must try every rotation and both page-segmentation modes on
+photos that look like they hold text. Measured: one topo page is stored
+sideways with EXIF orientation 0 (unset) and is unreadable upright, and the
+page that did read matched at some resolution/mode combinations and not
+others. A single pass is a coin toss.
+
+**R-F25** Reading is two-stage to stay affordable: one cheap upright pass
+ranks an event's photos by word count, and only the best few get the full
+treatment. The ranking is not a classifier -- rock and pages overlap -- and
+does not need to be, because the gazetteer discards gibberish.

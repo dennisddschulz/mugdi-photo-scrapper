@@ -3617,5 +3617,47 @@ class TestTripMerging(unittest.TestCase):
         merged, joined = merge_trips(events, gap_hours=18, max_days=3)
         self.assertEqual(joined, 0)
 
+class TestOcrRobustness(unittest.TestCase):
+    """A page photographed sideways is still a page."""
+
+    def test_every_rotation_is_tried(self):
+        """The second topo of one event is stored sideways and its EXIF
+        orientation tag is 0 -- unset -- so nothing can correct it
+        automatically. Upright it reads "ainssij eungiq ayinbiy";
+        rotated it reads "fissure Aiguille Dibona"."""
+        from photo_organizer.ocr import ROTATIONS
+
+        self.assertEqual(set(ROTATIONS), {0, 90, 180, 270})
+        self.assertEqual(ROTATIONS[0], 0, "upright must be tried first")
+
+    def test_both_segmentation_modes_are_tried(self):
+        """Matching was unstable across settings: the page that DID work
+        matched at 1000px/psm6 and not at 1800px/psm3."""
+        from photo_organizer.ocr import PSM_MODES
+
+        self.assertIn(6, PSM_MODES)
+        self.assertIn(3, PSM_MODES)
+
+    def test_the_resolution_is_high_enough_to_see_text_at_all(self):
+        """At 1000px the sideways page gave 3 words -- too few to look
+        like text; at 1400px it gave 16."""
+        from photo_organizer.ocr import OCR_EDGE
+
+        self.assertGreaterEqual(OCR_EDGE, 1400)
+
+    def test_word_count_counts_words_not_noise(self):
+        from photo_organizer.ocr import word_count
+
+        self.assertEqual(word_count("fissure Aiguille Dibona Boell"), 4)
+        self.assertEqual(word_count("a b c de fg"), 0)
+
+    def test_the_escalation_threshold_sits_above_rock(self):
+        """Measured at 1400px: rock photos gave 0, 2, 2, 3, 7, 9, 10 real
+        words; the two topo pages gave 16 and 49."""
+        from photo_organizer.ocr import TEXT_LIKELY_WORDS
+
+        self.assertGreater(TEXT_LIKELY_WORDS, 10)
+        self.assertLess(TEXT_LIKELY_WORDS, 16)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

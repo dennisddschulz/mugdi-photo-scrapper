@@ -353,7 +353,34 @@ a climbing library is full of grey rock. OCR needs no detector because it
 *is* one — over rock it returns `SESS JURE SaaS Paes iets Seen`, which matches
 nothing in a gazetteer of real places.
 
-One refinement that mattered: it does **not** stop at the first name found.
+**Reading a page is not one attempt.** The Dibona trip had two topos
+photographed 31 seconds apart. One read cleanly; the other did not, and the
+reason was that it is stored sideways with an EXIF orientation tag of `0` —
+unset. The camera never recorded which way up it was, so nothing could
+correct it:
+
+```
+upright   ainssij eungiq ayinbiy
+rotated   fissure Aiguille Dibona
+```
+
+Matching turned out to be unstable across settings too: the page that *did*
+work matched at 1000px/psm6 and 1000px/psm3 and 1800px/psm6, but **not** at
+1800px/psm3 or 2600px/psm6. One pass with one setting is a coin toss on
+whether an event gets named.
+
+So a photo that looks like it holds text is tried at **every rotation and
+both page-segmentation modes** until a real place name appears. To keep that
+affordable, it is two-stage: one cheap upright pass over the event ranks the
+photos by how much text they hold, and only the best few get the expensive
+treatment. Measured at 1400px, rock photos give 0–10 real words and the topo
+pages gave 16 and 49 — the sets overlap, so this is not a classifier, and it
+does not need to be. Escalating on a rock photo costs seconds and the
+gazetteer discards the gibberish.
+
+Reading a 41-photo event takes about 75 seconds.
+
+One further refinement: it does **not** stop at the first name found.
 The first photo of that event yielded the bare word "Aiguille" — a real
 gazetteer entry, French for "needle", and a useless folder name. Names are
 ranked by how specific they are.
