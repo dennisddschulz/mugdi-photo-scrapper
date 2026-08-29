@@ -276,6 +276,24 @@ select.num { width: auto; font-family: inherit; }
             <input class="num" id="distIn" type="number" min="1" max="20000" step="1"> <span style="font-size:12px;color:var(--ink-3)">km</span>
           </div>
         </div>
+        <label class="f" for="tripGapIn">Join consecutive days into one trip</label>
+        <div class="grid2">
+          <div>
+            <input class="num" id="tripGapIn" type="number" min="0" max="48" step="1">
+            <span style="font-size:12px;color:var(--ink-3)">hours apart at most</span>
+          </div>
+          <div>
+            <input class="num" id="tripDaysIn" type="number" min="0.5" max="30" step="0.5">
+            <span style="font-size:12px;color:var(--ink-3)">days long at most</span>
+          </div>
+        </div>
+        <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
+          A hut approach and the climb next morning are one outing, but the
+          gap above splits them overnight. This rejoins them <b>after</b>
+          naming, and only when one day knows where it was and the other does
+          not disagree — so two unrelated days never merge. 0 turns it off.
+        </div>
+
         <label class="f" for="geoIn">Place names</label>
         <select class="num" id="geoIn">
           <option value="offline">Offline database — no network, no key</option>
@@ -437,12 +455,15 @@ async function pushSettings() {
     await jpost("/api/settings", {
       time_gap_hours: parseFloat($("gapIn").value),
       distance_km: parseFloat($("distIn").value),
+      trip_gap_hours: parseFloat($("tripGapIn").value),
+      trip_max_days: parseFloat($("tripDaysIn").value),
       geocode: $("geoIn").value,
     });
     msg("cfgMsg", "Saved. Re-run the pipeline to apply.", "ok");
   } catch (e) { msg("cfgMsg", e.message, "err"); }
 }
-for (const id of ["gapIn", "distIn", "geoIn"]) $(id).onchange = pushSettings;
+for (const id of ["gapIn", "distIn", "geoIn", "tripGapIn", "tripDaysIn"])
+  $(id).onchange = pushSettings;
 
 /* ---------------- what Gemini found ---------------- */
 
@@ -1079,6 +1100,8 @@ async function refresh() {
   if (!$("outIn").matches(":focus")) $("outIn").value = STATUS.output || $("outIn").value || STATUS.suggested_output || "";
   if (!$("gapIn").matches(":focus")) $("gapIn").value = STATUS.config.time_gap_hours;
   if (!$("distIn").matches(":focus")) $("distIn").value = STATUS.config.distance_km;
+  if (!$("tripGapIn").matches(":focus")) $("tripGapIn").value = STATUS.config.trip_gap_hours;
+  if (!$("tripDaysIn").matches(":focus")) $("tripDaysIn").value = STATUS.config.trip_max_days;
   if (document.activeElement !== $("geoIn")) $("geoIn").value = STATUS.config.geocode;
 
   renderSteps(); renderRun(); renderSurvey();

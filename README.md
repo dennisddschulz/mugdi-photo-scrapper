@@ -391,15 +391,34 @@ The 12-hour rule splits an overnight, so a hut approach and the climb next
 morning become two events. On the real library one three-day trip became
 three, and **only the first day was named correctly**.
 
-Raising `time_gap_hours` globally is the wrong fix — it merges genuinely
-separate day trips. Instead, consecutive events are joined **after naming**,
+Raising `time_gap_hours` globally is the wrong fix. Measured on this library:
+
+| `time_gap_hours` | Events |
+| --- | --- |
+| 6 h | 458 |
+| **12 h** (default) | **379** |
+| 24 h | 183 |
+| 36 h | 130 |
+
+Doubling it halves the number of events, merging genuinely separate day trips
+along with the multi-day ones. So the gap keeps doing exactly what it did, and
+consecutive events are joined **after naming**,
 when there is evidence to justify it: the gap must be no more than a night,
 the trip must fit inside `trip_max_days` (3), and **one event must know where
 it was while the other does not contradict it**.
 
 That ordering is the whole design. Merging during clustering, on time alone,
 joined 106 events on this library — including a day of socialising with the
-next day's hike. Two unnamed days are not evidence of anything.
+next day's hike. Two unnamed days are not evidence of anything:
+
+```
+with NO names yet:   379 events -> 0 merges
+with one day named:  379 events -> 1 merge
+```
+
+Both controls are in the settings panel: the gap that splits, and the two
+that rejoin (`hours apart at most`, `days long at most`). Set the trip gap to
+0 to turn rejoining off entirely.
 
 ## Choosing which photos to analyse
 

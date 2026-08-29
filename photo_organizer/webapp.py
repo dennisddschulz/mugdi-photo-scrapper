@@ -364,6 +364,8 @@ class AppState:
             "steps": STEPS,
             "config": {
                 "time_gap_hours": self.config.cluster.time_gap_hours,
+                "trip_gap_hours": self.config.cluster.trip_gap_hours,
+                "trip_max_days": self.config.cluster.trip_max_days,
                 "distance_km": self.config.cluster.distance_km,
                 "geocode": self.config.geocode.provider,
             },
@@ -901,6 +903,24 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not 0 < value <= 24 * 30:
                     raise ValueError("time gap must be between 0 and 720 hours")
                 cfg.cluster.time_gap_hours = value
+            if payload.get("trip_gap_hours") is not None:
+                try:
+                    value = float(payload["trip_gap_hours"])
+                except (TypeError, ValueError):
+                    raise ValueError("trip gap must be a number") from None
+                # 0 turns trip joining off entirely, which is a legitimate
+                # choice; above 48 it stops being "a night" by any reading.
+                if not 0 <= value <= 48:
+                    raise ValueError("trip gap must be between 0 and 48 hours")
+                cfg.cluster.trip_gap_hours = value
+            if payload.get("trip_max_days") is not None:
+                try:
+                    value = float(payload["trip_max_days"])
+                except (TypeError, ValueError):
+                    raise ValueError("trip length must be a number") from None
+                if not 0 < value <= 30:
+                    raise ValueError("trip length must be between 0 and 30 days")
+                cfg.cluster.trip_max_days = value
             if payload.get("distance_km") is not None:
                 try:
                     value = float(payload["distance_km"])
