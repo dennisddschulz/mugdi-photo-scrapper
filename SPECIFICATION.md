@@ -354,6 +354,37 @@ database and can be surfaced later without re-analysing anything.
 **R-A7** Indicative cost at batch rates for this library (~13,881 photos,
 ~9,700 after duplicates): **about $2**, once.
 
+**R-A9** The analyses must be **queryable**: free text across captions, notes,
+transcribed text, names, keywords and grades, plus structured filters
+(activity, scene, region, range, peak, crag, locality, rock type, season,
+time of day, evidence basis, minimum rating, climbing grade) and facet counts
+for building filter menus.
+
+**R-A10** Personal documents are excluded from every query result unless
+explicitly requested. Flagging them exists so they stay out of everything by
+default.
+
+**R-A11** Browsing must stay interactive at **400,000 photos**, verified by
+measurement on the target machine rather than assumed. Achieved at: cache hit
+3.3 ms, filters 20-57 ms, facets 334 ms, stats 114 ms, full text 284 ms, with
+a 2.1 GB database.
+
+This requirement is met with **indexes, not a different database engine**.
+Measured before and after: facets 19,661 ms -> 334 ms, grade filter 4,869 ms
+-> 22 ms, stats 5,218 ms -> 114 ms. The specific techniques, each of which
+matters:
+
+* partial indexes carrying the `is_personal = 0` predicate every query applies;
+* composite `(filter, taken_at DESC)` indexes so one index serves both the
+  filter and the ordering;
+* a `photo_grade` table, since grades are many-per-photo;
+* generated columns for fields that live inside the JSON payload;
+* a complement index over the rows flagged personal.
+
+**R-A12** No server, no container, no Postgres. Measured at 400k photos there
+is no scaling argument for one, and the single-file database is the property
+that makes the paid-for analyses easy to back up. See CLAUDE.md.
+
 ---
 
 ## 6. Suggested implementation stack (reference, not binding)

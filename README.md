@@ -180,6 +180,61 @@ not an estimate.
 Tunable under `[analysis]`: `location_agreement_km` (default 25),
 `location_min_agreeing` (2), `location_min_fraction` (0.4).
 
+## Browsing and searching the analyses
+
+Every Gemini answer is queryable, not just the fields that reach a folder name.
+
+```python
+from photo_organizer.db import AnalysisStore
+store = AnalysisStore()
+
+store.search("Hannibalturm")                              # full text
+store.search(filters={"rock_type": "granite", "min_score": 5})
+store.search(grade="6a+", filters={"region": "Uri"})
+store.facets()                                            # counts for filter menus
+```
+
+Free text covers caption, notes, transcribed text, route and peak names,
+keywords, visible place names, grades and the file name. Personal documents
+are excluded from every query unless explicitly asked for.
+
+### Does SQLite scale? Measured at 400,000 photos
+
+Asked directly, so it was measured rather than guessed: 400,000 synthetic
+photos with realistic payloads, through the real `AnalysisStore` API, on this
+laptop.
+
+| Operation | Before indexing | After |
+| --- | --- | --- |
+| Cache hit (`get`) — the path that matters most | 4.4 ms | **3.3 ms** |
+| `missing()` for 500 hashes | 49 ms | **34 ms** |
+| Filter by activity | 753 ms | **20 ms** |
+| Filter by grade `6a+` | 4,869 ms | **22 ms** |
+| Filter 5-star granite | 989 ms | **29 ms** |
+| All facet menus | 19,661 ms | **334 ms** |
+| `stats()` | 5,218 ms | **114 ms** |
+| Full-text search | 284 ms | **284 ms** |
+
+Database size: **2.1 GB for 400k photos** (~5.3 KB each, including the
+complete API reply kept verbatim). Bulk load ~117 s; full-text index ~30 s.
+
+**Conclusion: SQLite is not the constraint, and Postgres would not have been
+faster here.** What was slow was missing indexes, and every fix is one:
+
+- **Partial indexes** (`WHERE is_personal = 0`) matching the predicate every
+  browse query applies. Without the predicate in the index, it cannot serve
+  the query — this alone was the 19.7 s → 0.3 s facet fix.
+- **Composite `(filter, taken_at DESC)` indexes**, because an index on the
+  filter alone still left SQLite sorting 80,000 matches to return 200.
+- **Grades in their own indexed table** instead of `json_each` over every row.
+- **Generated columns** for fields inside the JSON, so queries never parse it.
+- A **complement index** on the 0.2% of rows flagged personal, which the
+  `WHERE is_personal = 0` indexes by definition cannot cover.
+
+One caveat on the numbers: the fixture gives every photo the same caption and
+notes, so a common-word text search matches all 400,000 rows — a worst case,
+not a typical one. `"Plaisir Ost"` at 644 ms is that case.
+
 ## How events are decided
 
 Photos are sorted by timestamp. A new event starts after a gap of

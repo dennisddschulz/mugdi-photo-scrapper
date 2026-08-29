@@ -61,11 +61,50 @@ peaks database (e.g. OpenStreetMap named peaks), and use compass heading
 (GPSImgDirection) when present to narrow to the visible summit. The script
 PROPOSES a name; the user confirms. "Iconic/meaningful" is always a human call.
 
+## WORKING AGREEMENT (applies to every change)
+
+1. **Commit and push every change immediately.** Do not batch work up into one
+   commit at the end of a session. Each self-contained change gets its own
+   commit with a message saying WHY, and is pushed to
+   `https://github.com/dennisddschulz/mugdi-photo-scrapper.git` straight away.
+   Working state must never exist only on this laptop.
+   - `git config http.sslBackend schannel` is already set. It is required:
+     AVG AntiVirus re-signs HTTPS with its own root CA, which git's bundled
+     CA list does not know. Never work around this with `sslVerify=false`.
+   - If a push needs a GitHub sign-in, say so and leave the commit ready
+     rather than skipping the push silently.
+
+2. **Write every change down in the docs, in the same commit as the code.**
+   Code and documentation are never allowed to disagree.
+   - `README.md` — what it does, how to run it, what it costs.
+   - `SPECIFICATION.md` — the requirement that changed, by its R-number.
+   - `config.example.toml` — any new or changed setting, with the reasoning.
+   - `CLAUDE.md` — only for rules and constraints, not for status.
+
+3. **Record the measurement, not just the conclusion.** This project has been
+   wrong before in ways that only numbers caught: "Salbitschijen" for a summit
+   13 km away, faceting at 19.7 s that looked like 46 ms in a benchmark that
+   omitted a filter. When a decision rests on a measurement, put the number in
+   the docs so the next person can check it rather than trust it.
+
+4. **State what is unverified.** If something has not been run against the real
+   API, the real drive, or the real library, say so plainly in the docs and in
+   the summary. Do not present a unit test as evidence that something works
+   end to end.
+
 ## Environment
 
 - Windows laptop. Photos on external USB drives. Limited internal SSD.
 - No server, no Docker, no always-on services. Everything runs as a local batch
   script, on demand.
+  - Measured 2026-08-29: SQLite handles 400,000 photos comfortably, so there
+    is no scaling reason to add Postgres. The analysis database is ONE FILE
+    you can copy next to the photos, and it is the only record of analyses
+    that cost money. A database inside a container volume is a step
+    backwards from that.
+  - The old note that Docker was ruled out because of USB drives applies only
+    to running the SCANNER in a container, where D:\ must cross the WSL2
+    boundary. It is not an argument about databases.
 - Large libraries: run heavy steps (CLIP tagging, aesthetic scoring) as an
   overnight batch, not live.
 - Tags/ratings must be written INTO the files (XMP/IPTC) so they survive and are
