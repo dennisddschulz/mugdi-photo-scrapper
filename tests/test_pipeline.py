@@ -3712,5 +3712,82 @@ class TestOutputTargetGuard(unittest.TestCase):
         with self.assertRaises(UnsafePathError):
             check_paths(root, Path("C:" + chr(92)))
 
+class TestOcrNameQuality(unittest.TestCase):
+    """Real gazetteer entries that say nothing about where a photo was."""
+
+    def test_articles_and_generics_are_rejected(self):
+        """Seen in a real run: Le Toit, Le Nid, Le Puy, Am Berg -- the
+        roof, the nest, the puy, at the mountain. All real entries."""
+        from photo_organizer.ocr import is_specific_enough
+
+        for junk in ("Le Toit", "Le Nid", "Le Puy", "Am Berg", "La Cresta",
+                     "Der Berg", "Il Col"):
+            with self.subTest(name=junk):
+                self.assertFalse(is_specific_enough(junk))
+
+    def test_two_short_fragments_are_rejected(self):
+        """Six events in one run were nearly named this."""
+        from photo_organizer.ocr import is_specific_enough
+
+        self.assertFalse(is_specific_enough("Sé Pé"))
+
+    def test_a_bare_generic_word_is_rejected(self):
+        from photo_organizer.ocr import is_specific_enough
+
+        self.assertFalse(is_specific_enough("Aiguille"))
+
+    def test_real_names_survive(self):
+        from photo_organizer.ocr import is_specific_enough
+
+        for good in ("Aiguille Dibona", "Salbitschijen", "Hannibalturm",
+                     "Dammazwillinge", "Monts Rouges de Triolet",
+                     "Hochschneid - La Cresta", "Piz Badile"):
+            with self.subTest(name=good):
+                self.assertTrue(is_specific_enough(good))
+
+
+class TestOcrCaching(unittest.TestCase):
+    """Reading the library takes hours. Doing it twice is the same mistake
+    as paying twice for the same analysis."""
+
+    def _store(self):
+        from photo_organizer.db import AnalysisStore
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        return AnalysisStore(root / "a.sqlite3")
+
+    def test_text_survives_a_round_trip(self):
+        store = self._store()
+        store.put_text("h1", "fissure Aiguille Dibona")
+        self.assertEqual(store.get_text("h1"), "fissure Aiguille Dibona")
+
+    def test_an_empty_result_is_remembered_too(self):
+        """Establishing that a photo has no text took just as long."""
+        store = self._store()
+        store.put_text("h2", "")
+        self.assertEqual(store.get_text("h2"), "")
+        self.assertIsNone(store.get_text("never-read"))
+
+    def test_rereading_replaces_rather_than_duplicating(self):
+        store = self._store()
+        store.put_text("h1", "first")
+        store.put_text("h1", "second")
+        self.assertEqual(store.get_text("h1"), "second")
+        self.assertEqual(store.text_count(), 1)
+
+    def test_the_scan_uses_the_cache_instead_of_reading_again(self):
+        from photo_organizer.ocr import scan_for_text
+
+        store = self._store()
+        photos = [make_photo("a.jpg"), make_photo("b.jpg")]
+        for i, photo in enumerate(photos):
+            photo.content_key = "key%d" % i
+            store.put_text(photo.content_key, "Aiguille Dibona fissure rampe")
+        # The files do not exist, so anything that actually ran Tesseract
+        # would come back empty.
+        ranked = scan_for_text(photos, store=store)
+        self.assertTrue(all(words > 0 for words, _p in ranked), ranked)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

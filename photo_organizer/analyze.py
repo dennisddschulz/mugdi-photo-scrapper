@@ -1389,6 +1389,7 @@ def read_events_locally(
     It runs AFTER the paid analysis, on what that could not name, because
     OCR is slow (about one photo a second) and most events do not need it.
     """
+    from .db import AnalysisStore
     from .ocr import available, best_name, read_event, unavailable_reason
     from .peaks import PeakIndex
 
@@ -1402,6 +1403,8 @@ def read_events_locally(
     if not available():
         say(unavailable_reason())
         return {"read": 0, "named": 0, "skipped": True}
+
+    store = AnalysisStore(Path(settings.database_path).expanduser())
 
     peak_index = PeakIndex.load() if settings.use_gazetteer else None
     if peak_index is None or not len(peak_index):
@@ -1438,6 +1441,7 @@ def read_events_locally(
             countries=settings.peak_countries,
             max_photos=settings.ocr_max_photos_per_event,
             should_cancel=should_cancel,
+            store=store,
         )
         read_count += len(results)
         # The most specific name found anywhere in the event, not the first.

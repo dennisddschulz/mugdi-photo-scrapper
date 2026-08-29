@@ -97,6 +97,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
     tokenize='unicode61'
 );
 
+-- Text read out of photos, keyed by content hash like everything else.
+-- Reading a 41-photo event takes about 75 seconds, and a run over the whole
+-- library takes hours. Doing that twice for the same bytes is the same
+-- mistake as paying twice for the same analysis.
+CREATE TABLE IF NOT EXISTS ocr_text (
+    content_hash TEXT PRIMARY KEY,
+    read_at      TEXT NOT NULL,
+    text         TEXT NOT NULL
+);
+
 -- Batch jobs, so a submitted job survives the app being closed. A batch can
 -- take up to 24 hours; losing the job name would mean paying twice.
 CREATE TABLE IF NOT EXISTS batch_job (
@@ -511,6 +521,39 @@ class AnalysisStore:
                 ).fetchall()
                 out[name] = [(r["value"], r["n"]) for r in rows]
         return out
+
+    # -- text read from photos --------------------------------------------
+
+    def get_text(self, content_hash: str) -> Optional[str]:
+        """Text already read from this photo, or None."""
+        if not content_hash:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT text FROM ocr_text WHERE content_hash=?", (content_hash,)
+            ).fetchone()
+        return row["text"] if row else None
+
+    def put_text(self, content_hash: str, text: str) -> None:
+        """Remember what was read, so it is never read again.
+
+        Empty results are stored too. "There is no text in this photo" took
+        just as long to establish as finding some, and is just as useless to
+        rediscover.
+        """
+        if not content_hash:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO ocr_text (content_hash, read_at, text)"
+                " VALUES (?,?,?) ON CONFLICT(content_hash) DO UPDATE SET"
+                "  read_at=excluded.read_at, text=excluded.text",
+                (content_hash, datetime.now().isoformat(timespec="seconds"), text),
+            )
+
+    def text_count(self) -> int:
+        with self._connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM ocr_text").fetchone()[0]
 
     def reindex_search(self, progress=None) -> int:
         """Rebuild the full-text index from the stored payloads."""

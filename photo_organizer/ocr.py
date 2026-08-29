@@ -215,20 +215,49 @@ def specificity(name: str) -> tuple:
     return (len(words), len(name))
 
 
-def is_specific_enough(name: str) -> bool:
-    """Reject names too generic to be worth putting in a folder.
+# Articles and geographic generics. A gazetteer contains thousands of real
+# places called "Le Toit" or "Am Berg", and reading one off a photo says
+# nothing about where the photo was taken.
+_ARTICLES = {
+    "le", "la", "les", "der", "die", "das", "den", "dem", "il", "lo", "gli",
+    "the", "am", "auf", "im", "in", "de", "du", "des", "del", "al", "el",
+    "aux", "zum", "zur", "sur", "sous",
+}
+_GENERIC = {
+    "toit", "nid", "puy", "berg", "dent", "pointe", "cima", "punta", "mont",
+    "col", "tete", "tour", "roc", "pic", "haus", "hut", "alp", "see", "val",
+    "hof", "bach", "wald", "feld", "kopf", "horn", "stein", "cresta", "croix",
+}
 
-    A single short word passes the gazetteer's own test and still says
-    nothing: measured, an event was nearly named "Aiguille" because that
-    photo happened to be read first.
+
+def is_specific_enough(name: str) -> bool:
+    """Is this name worth putting in a folder?
+
+    Two rules, and both are needed. The length rule alone let through "Sé
+    Pé" -- two accented fragments -- and "Le Toit", "Le Nid", "Le Puy",
+    which are French for the roof, the nest and the puy. All are real
+    gazetteer entries and none of them says where a photo was taken.
+
+    So: enough of a name (two words, or one long one), AND something in it
+    that is neither an article nor the generic word every third mountain
+    shares. "Aiguille Dibona" keeps its Dibona; "Le Toit" has nothing left.
     """
-    words = name.split()
-    return len(words) >= 2 or len(name) >= 11
+    words = [w.strip("-–—") for w in name.split() if w.strip("-–—")]
+    if not words:
+        return False
+    if len(words) < 2 and len(name) < 11:
+        return False
+    core = [
+        w for w in (word.lower() for word in words)
+        if w not in _ARTICLES and w not in _GENERIC
+    ]
+    return any(len(w) >= 5 for w in core)
 
 
 def scan_for_text(
     photos: Sequence,
     max_photos: int = 0,
+    store=None,
     should_cancel: Optional[Callable[[], bool]] = None,
     progress: Optional[Callable[[int, int, Path], None]] = None,
 ) -> list[tuple]:
@@ -256,7 +285,17 @@ def scan_for_text(
             break
         if progress:
             progress(position, len(candidates), photo.source_path)
-        text = _run_tesseract(binary, photo.source_path, OCR_EDGE, PSM_MODES[0], 0, 60)
+        # Never read the same bytes twice. A pass over this library takes
+        # hours; doing it again on the next run is the same mistake as
+        # paying twice for the same analysis.
+        key = getattr(photo, "content_key", None)
+        text = store.get_text(key) if (store is not None and key) else None
+        if text is None:
+            text = _run_tesseract(
+                binary, photo.source_path, OCR_EDGE, PSM_MODES[0], 0, 60
+            )
+            if store is not None and key:
+                store.put_text(key, text)
         ranked.append((word_count(text), photo))
     ranked.sort(key=lambda pair: -pair[0])
     return ranked
@@ -269,6 +308,7 @@ def read_event(
     stop_after_hit: bool = True,
     max_photos: int = 0,
     deep_photos: int = 6,
+    store=None,
     should_cancel: Optional[Callable[[], bool]] = None,
     progress: Optional[Callable[[int, int, Path], None]] = None,
 ) -> list[OcrResult]:
@@ -286,7 +326,7 @@ def read_event(
     results: list[OcrResult] = []
 
     # Cheap pass first, to find out WHICH photos are worth reading properly.
-    ranked = scan_for_text(photos, max_photos=max_photos,
+    ranked = scan_for_text(photos, max_photos=max_photos, store=store,
                            should_cancel=should_cancel, progress=progress)
     candidates = [photo for words, photo in ranked if words >= 3][:deep_photos]
     if not candidates and ranked:
