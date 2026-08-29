@@ -626,6 +626,48 @@ def apply_to_event(
     return "none"
 
 
+def pending_cost(
+    plan: Plan, config: Config, store=None
+) -> dict:
+    """How many photos still need analysing, and what that will cost.
+
+    Only photos absent from the cache count. Quoting the whole library on a
+    re-run is wrong by the entire cached amount, and wrong in the direction
+    that discourages re-running something free.
+    """
+    from .batch import estimate_cost_usd
+    from .db import AnalysisStore
+    from .dedupe import content_hash
+
+    settings = config.analysis
+    store = store or AnalysisStore(Path(settings.database_path).expanduser())
+
+    keys: list[str] = []
+    hashed_now = 0
+    for event in plan.events:
+        for photo in select_photos(event, settings.photos_per_event):
+            key = photo.content_key
+            if key is None:
+                key = content_hash(photo.source_path, photo.size_bytes)
+                photo.content_key = key
+                hashed_now += 1
+            if key:
+                keys.append(key)
+
+    unique = list(dict.fromkeys(keys))
+    known = store.get_many(unique)
+    pending = [k for k in unique if k not in known]
+    return {
+        "selected": len(unique),
+        "already_analysed": len(known),
+        "pending": len(pending),
+        "estimated_cost_usd": estimate_cost_usd(
+            len(pending), batch=settings.use_batch
+        ),
+        "hashed_now": hashed_now,
+    }
+
+
 def analyze_plan(
     plan: Plan,
     config: Config,
@@ -669,8 +711,14 @@ def analyze_plan(
     chosen: list[tuple[str, Photo]] = []
     for event in targets:
         for photo in select_photos(event, settings.photos_per_event):
-            digest = content_hash(photo.source_path, photo.size_bytes)
+            # Reuse the key the duplicate pass already computed. Re-reading
+            # 14,000 files off an external drive to learn what we were just
+            # told is minutes of pure waste.
+            digest = photo.content_key or content_hash(
+                photo.source_path, photo.size_bytes
+            )
             if digest:
+                photo.content_key = digest
                 chosen.append((digest, photo))
     stats.photos_selected = len(chosen)
 

@@ -439,9 +439,20 @@ $("allBtn").onclick = async () => {
   }
   // One dialog, stating what it will do. This is the preview and the
   // consent in a single step, which is what makes the typed word unnecessary.
-  const st = await jget("/api/status");
-  const n = (st.survey && st.survey.images) || 0;
-  const cost = (n * 0.0002).toFixed(2);
+  const est = await jget("/api/estimate");
+  const n = est.selected || 0;
+  const cost = (est.estimated_cost_usd || 0).toFixed(2);
+  // Before a scan there is no plan, so the cache cannot be consulted yet and
+  // this figure is an upper bound. Say so rather than quoting it as fact.
+  const costLine = est.known
+    ? `  ${est.pending} of ${est.selected} photo(s) still need analysing: about $${cost}.
+` +
+      `  ${est.already_analysed} are already cached and cost nothing.
+`
+    : `  Analysis: at most about $${cost}, and less for anything already
+` +
+      `  analysed before -- those are free and are discounted once scanned.
+`;
   if (!confirm(
     `Run everything on ${n} photo(s)?
 
@@ -453,10 +464,10 @@ $("allBtn").onclick = async () => {
 ` +
     `This will scan, group, find duplicates, analyse the photos with
 ` +
-    `Gemini (roughly $${cost}, billed to your Google account) and then
-` +
-    `copy everything into the output folder.
+    `Gemini, then copy everything into the output folder.
 
+` +
+    costLine + `
 ` +
     `Your originals are not touched. Duplicates are set aside for review,
 ` +
@@ -471,6 +482,30 @@ $("allBtn").onclick = async () => {
 };
 $("cancelBtn").onclick = async () => { try { await jpost("/api/cancel"); } catch (e) { toast(e.message, true); } };
 $("enrichBtn").onclick = async () => {
+  // Quote what is actually pending. Photos already in the cache are free,
+  // so quoting the whole library would overstate a re-run by all of it.
+  let est = null;
+  try { est = await jget("/api/estimate"); } catch (e) { /* fall through */ }
+  if (est && est.known) {
+    if (est.pending === 0) {
+      toast(`All ${est.selected} photo(s) are already analysed — this is free.`);
+    } else if (!confirm(
+        `Analyse ${est.pending} photo(s) with Gemini?
+
+` +
+        `  ${est.already_analysed} of ${est.selected} are already cached and cost nothing.
+` +
+        `  Estimated cost for the rest: about $${(est.estimated_cost_usd || 0).toFixed(2)},
+` +
+        `  billed to your Google account.
+
+` +
+        `Results are cached forever, so re-running this later is free.
+` +
+        `These images are uploaded to Google. Nothing is written to your photos.`)) {
+      return;
+    }
+  }
   try { await jpost("/api/run", { step: "enrich" }); $("logBox").style.display = "block"; startPolling(); }
   catch (e) { toast(e.message, true); }
 };

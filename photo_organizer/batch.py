@@ -425,4 +425,8 @@ def estimate_cost_usd(images: int, batch: bool = True) -> float:
     """
     # ~300 tokens per 1024px image plus prompt, ~250 output tokens.
     per_image_usd = 0.0004
-    return round(images * per_image_usd * (0.5 if batch else 1.0), 2)
+    # Not rounded here. Rounding to cents inside the calculation made "one
+    # photo pending" and "nothing pending" both read as $0.00, and that is
+    # exactly the distinction the confirmation dialog turns on. Callers
+    # round for display.
+    return images * per_image_usd * (0.5 if batch else 1.0)

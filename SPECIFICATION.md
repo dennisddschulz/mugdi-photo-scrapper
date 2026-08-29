@@ -482,3 +482,13 @@ confirmation at all must remain impossible, and is tested.
 folders are then named from what is already known and the photos are still
 copied: copying is the part that cannot be redone cheaply, and analysis
 results are cached anyway.
+
+**R-A13** Cost quoted to the user must be for the photos that are actually
+**pending**, never for the whole library. Quoting the full amount on a re-run
+overstates it by everything already cached, and discourages re-running
+something that is free.
+
+**R-A14** The duplicate pass records each photo's analysis cache key on the
+photo, and the analysis stage reuses it. The two must compute the SAME key --
+if they ever diverge every photo is paid for twice, and a test asserts they
+agree. This also removes a second full read of every file.

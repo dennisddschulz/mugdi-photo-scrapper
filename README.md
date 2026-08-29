@@ -175,6 +175,15 @@ Duplicates are removed first, so this library costs roughly **$2 once**:
 | --- | --- | --- | --- |
 | Whole library | 13,881 | $2.78 | $5.55 |
 | After duplicates | ~9,700 | **$1.94** | $3.88 |
+| **Every run after the first** | 0 pending | **$0.00** | — |
+
+That last row is the one that matters. The cost is a **one-off**. Every later
+Identify run finds each photo in the cache and sends nothing — proved by
+running it with a deliberately invalid API key, which would fail loudly on any
+call, and getting `submitted: 0, cost: $0.0000` with the events still named.
+
+The confirmation dialogs quote what is **actually pending**, not the size of
+the library, so a re-run correctly says free rather than $2.78.
 
 Set a spending limit on the Google billing account — that is the real guard.
 A submitted batch job is recorded in the database so it survives the app

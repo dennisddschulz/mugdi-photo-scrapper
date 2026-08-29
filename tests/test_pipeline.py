@@ -2408,5 +2408,82 @@ class TestBatchStates(unittest.TestCase):
         self.assertFalse(BatchResult(state="BATCH_STATE_PENDING").succeeded)
 
 
+class TestPendingCost(unittest.TestCase):
+    """The quote must be for what is pending, not for the whole library."""
+
+    def _plan_with_cache(self, cached: int):
+        from photo_organizer.db import AnalysisStore
+        from photo_organizer.dedupe import content_hash
+        from photo_organizer.planner import build_plan
+        from photo_organizer.schema import PhotoAnalysis
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        source = root / "src"
+        source.mkdir()
+        from PIL import Image
+
+        for i in range(4):
+            # Distinct pixels so the files differ in content, not just name:
+            # identical images would hash the same and hide a real bug here.
+            Image.new("RGB", (64, 48), (10 * i, 90, 130)).save(
+                source / f"IMG_2019090{i}_1200{i}0.jpg", "JPEG")
+        config = Config()
+        config.analysis.database_path = str(root / "cache.sqlite3")
+        config.geocode.provider = "none"
+        plan = build_plan(source, root / "out", config)
+        store = AnalysisStore(Path(config.analysis.database_path))
+        for photo in list(plan.photos)[:cached]:
+            key = content_hash(photo.source_path, photo.size_bytes)
+            store.put(key, photo.source_path, PhotoAnalysis(activity="hiking"),
+                      photo.size_bytes, photo.timestamp)
+        return plan, config, store
+
+    def test_cached_photos_are_not_charged_for(self):
+        from photo_organizer.analyze import pending_cost
+
+        plan, config, store = self._plan_with_cache(cached=4)
+        out = pending_cost(plan, config, store)
+        self.assertEqual(out["pending"], 0)
+        self.assertEqual(out["already_analysed"], 4)
+        self.assertEqual(out["estimated_cost_usd"], 0.0)
+
+    def test_only_the_uncached_are_charged_for(self):
+        from photo_organizer.analyze import pending_cost
+
+        plan, config, store = self._plan_with_cache(cached=3)
+        out = pending_cost(plan, config, store)
+        self.assertEqual(out["pending"], 1)
+        self.assertEqual(out["already_analysed"], 3)
+        self.assertGreater(out["estimated_cost_usd"], 0.0)
+
+    def test_the_duplicate_pass_supplies_the_key_so_nothing_is_hashed_twice(self):
+        from photo_organizer.analyze import pending_cost
+        from photo_organizer.dedupe import find_duplicates
+
+        plan, config, store = self._plan_with_cache(cached=0)
+        photos = list(plan.photos)
+        self.assertTrue(all(p.content_key is None for p in photos))
+        find_duplicates(photos)
+        self.assertTrue(all(p.content_key for p in photos),
+                        "dedupe must leave the analysis cache key behind")
+        out = pending_cost(plan, config, store)
+        self.assertEqual(out["hashed_now"], 0,
+                         "no file should be read and hashed a second time")
+
+    def test_the_key_matches_the_one_the_cache_uses(self):
+        """If these ever diverge, every photo is paid for twice."""
+        from photo_organizer.dedupe import content_hash, find_duplicates
+
+        plan, _config, _store = self._plan_with_cache(cached=0)
+        photos = list(plan.photos)
+        find_duplicates(photos)
+        for photo in photos:
+            self.assertEqual(
+                photo.content_key,
+                content_hash(photo.source_path, photo.size_bytes),
+                "the duplicate pass and the cache must agree on the key")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

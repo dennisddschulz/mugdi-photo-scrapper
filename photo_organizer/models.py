@@ -55,6 +55,10 @@ class Photo:
     # nothing is ever deleted on the strength of this.
     duplicate_role: Optional[str] = None
     duplicate_of: Optional[str] = None
+    # The analysis cache key for this file, filled in by the duplicate pass.
+    # Kept so the analysis stage does not have to read and hash every file a
+    # second time, and so the cost of a run can be quoted without doing so.
+    content_key: Optional[str] = None
 
     @property
     def has_gps(self) -> bool:

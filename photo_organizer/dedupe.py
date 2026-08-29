@@ -231,12 +231,26 @@ def find_duplicates(
         except OSError as exc:
             log.debug("Could not read %s: %s", photo.source_path, exc)
             return photo, None, None
+        # The same digest the analysis cache is keyed by, so one read serves
+        # duplicate detection AND tells the analysis stage what it already
+        # has. It was previously head-only here and head+tail there, which
+        # meant every file was read and hashed twice.
         digest = hashlib.blake2b(digest_size=16)
         digest.update(str(photo.size_bytes).encode())
         digest.update(head)
+        if photo.size_bytes > HEAD_BYTES * 2:
+            try:
+                with open(photo.source_path, "rb") as handle:
+                    handle.seek(-HEAD_BYTES, 2)
+                    digest.update(handle.read(HEAD_BYTES))
+            except OSError as exc:
+                log.debug("Could not read the tail of %s: %s", photo.source_path, exc)
+                return photo, None, None
+        key = digest.hexdigest()
+        photo.content_key = key
         return (
             photo,
-            digest.hexdigest(),
+            key,
             perceptual_hash(photo.source_path, head=head) if near else None,
         )
 

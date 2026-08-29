@@ -678,6 +678,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if route == "/api/status":
             self._json(200, self.state.status_dict())
             return
+        if route == "/api/estimate":
+            self._estimate()
+            return
+
         if route == "/api/plan":
             self._json(200, self.state.plan_dict())
             return
@@ -819,7 +823,10 @@ class AppHandler(BaseHTTPRequestHandler):
             self._run_everything(payload)
             return
 
-        if step == "analyze":
+        # "enrich" is what the page has always sent; "analyze" is the id in
+        # STEPS. Both mean the same thing, and only accepting one of them
+        # made the Identify button answer "not implemented yet".
+        if step in ("analyze", "enrich", "identify"):
             self._run_analyze()
             return
 
@@ -922,6 +929,42 @@ class AppHandler(BaseHTTPRequestHandler):
 
         ok, message = state.start_job("Build plan", work)
         self._json(200 if ok else 409, {"ok": ok, "message": message})
+
+    def _estimate(self) -> None:
+        """What the next analysis run would actually cost.
+
+        Only photos absent from the cache count. Quoting the whole library
+        on a re-run overstates it by the entire cached amount.
+        """
+        from .analyze import pending_cost
+
+        state = self.state
+        if state.plan is None:
+            survey = state.survey or {}
+            images = survey.get("images", 0)
+            from .batch import estimate_cost_usd
+
+            self._json(200, {
+                "known": False,
+                "selected": images,
+                "already_analysed": None,
+                "pending": images,
+                "estimated_cost_usd": estimate_cost_usd(
+                    images, batch=state.config.analysis.use_batch),
+                "note": "upper bound -- nothing has been scanned yet, so any "
+                        "photos already in the cache are not yet discounted",
+            })
+            return
+        try:
+            data = pending_cost(state.plan, state.config)
+        except Exception as exc:
+            self._json(500, {"error": f"could not estimate: {exc}"})
+            return
+        data["known"] = True
+        data["note"] = (
+            "photos already analysed cost nothing; only the pending ones are billed"
+        )
+        self._json(200, data)
 
     def _run_everything(self, payload: dict) -> None:
         """Everything, in one job: plan, duplicates, identify, copy.
