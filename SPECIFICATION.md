@@ -390,6 +390,11 @@ not ceremony: `127.0.0.1` is reachable by every program on the machine and by
 any web page the user has open, and the API browses directories and copies
 files.
 
+**R-U1b** The control panel listens on **both** loopback addresses, `::1`
+and `127.0.0.1`. `localhost` resolves to `::1` first on Windows, so an
+IPv4-only bind makes the hostname everybody types simply fail. Neither
+socket is reachable off the machine; binding `0.0.0.0` or `""` is forbidden.
+
 **R-U2** The token is **persistent** (`~/.photo_organizer/ui_token`), so the
 URL is stable and bookmarkable. A per-run token was the reason to want the
 protection removed, which is the worst of the three outcomes. Deleting the

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import string
 import threading
 import traceback
@@ -539,6 +540,7 @@ class AppHandler(BaseHTTPRequestHandler):
             f"http://{host}:{port}",
             f"http://127.0.0.1:{port}",
             f"http://localhost:{port}",
+            f"http://[::1]:{port}",
         }
         return origin in allowed
 
@@ -1049,10 +1051,46 @@ class _AppServer(ThreadingHTTPServer):
     daemon_threads = True
 
 
+class _AppServerV6(_AppServer):
+    """The same server on the IPv6 loopback."""
+
+    address_family = socket.AF_INET6
+
+
 def make_server(state: AppState, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
     handler = type("BoundAppHandler", (AppHandler,), {"state": state})
-    # Loopback only. Never 0.0.0.0 -- this exposes the photo library.
+    # Loopback only. Never 0.0.0.0 or "" -- that would expose the photo
+    # library to the whole network.
     return _AppServer(("127.0.0.1", port), handler)
+
+
+def make_v6_server(
+    state: AppState, port: int = DEFAULT_PORT
+) -> Optional[ThreadingHTTPServer]:
+    """A second listener on ::1, or None if IPv6 is unavailable.
+
+    `localhost` resolves to ::1 before 127.0.0.1 on this machine, so without
+    this a browser pointed at http://localhost:8080/ is simply refused. Also
+    loopback-only: ::1 is no more reachable from outside than 127.0.0.1.
+
+    Returns None rather than failing. A missing IPv6 stack should cost the
+    convenience of one hostname, never the ability to start.
+    """
+    if not socket.has_ipv6:
+        return None
+    handler = type("BoundAppHandlerV6", (AppHandler,), {"state": state})
+    try:
+        server = _AppServerV6(("::1", port), handler)
+    except OSError as exc:
+        log.debug("No IPv6 loopback listener: %s", exc)
+        return None
+    # Refuse to hand back anything that is not loopback, whatever the OS did.
+    bound = server.server_address[0]
+    if bound not in ("::1", "0:0:0:0:0:0:0:1"):
+        log.warning("Refusing a non-loopback IPv6 bind on %s", bound)
+        server.server_close()
+        return None
+    return server
 
 
 # The UI token lives beside the analysis database, not in the source tree,
@@ -1132,6 +1170,14 @@ def serve_app(
         raise SystemExit(2) from None
 
     host, bound = server.server_address[:2]
+    # localhost resolves to ::1 before 127.0.0.1, so serve both or the name
+    # everybody actually types does not work.
+    v6_server = make_v6_server(state, bound)
+    if v6_server is not None:
+        threading.Thread(
+            target=v6_server.serve_forever, name="photo-organizer-v6", daemon=True
+        ).start()
+
     url = f"http://{host}:{bound}/?t={state.token}"
     plain = f"http://{host}:{bound}/"
 
@@ -1139,6 +1185,10 @@ def serve_app(
     print(f"    {url}", flush=True)
     print(f"  After the first visit, {plain} works on its own -- bookmark that.",
           flush=True)
+    if v6_server is not None:
+        print(f"  http://localhost:{bound}/?t={state.token} works too.", flush=True)
+        print("  (Each hostname needs the token once; the cookie is per-host.)",
+              flush=True)
     print("  The token stays the same between runs. It is what stops another",
           flush=True)
     print("  program, or a web page you have open, driving this app.", flush=True)
@@ -1153,6 +1203,9 @@ def serve_app(
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        if v6_server is not None:
+            v6_server.shutdown()
+            v6_server.server_close()
         print("\n  Stopped.", flush=True)
     finally:
         server.server_close()

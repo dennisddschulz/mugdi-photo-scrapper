@@ -93,7 +93,13 @@ silently does nothing. `start.bat` finds the real interpreter for you; by hand
 you may need the full path, e.g.
 `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`.
 
-Then open **`http://127.0.0.1:8080/`**. Pick folders, run the pipeline, review
+Then open **`http://localhost:8080/`** (or `http://127.0.0.1:8080/`).
+
+The server listens on **both loopback addresses**. It has to: `localhost`
+resolves to IPv6 `::1` before `127.0.0.1` on Windows, so an IPv4-only bind
+left `http://localhost:8080/` refused by the browser while `127.0.0.1`
+worked. Both sockets are loopback-only — `::1` is no more reachable from
+the network than `127.0.0.1` is. Pick folders, run the pipeline, review
 the result, and copy when you are satisfied. It is not a service: it starts
 when you ask and stops when you click Quit, and it binds loopback only.
 
@@ -120,7 +126,19 @@ every time and nothing you could bookmark. Now:
 Verified end to end: bare URL 200, no credentials 403, and a cross-site POST
 carrying a valid cookie 403 `cross-site request refused`.
 
+Cookies are per-hostname, so `localhost` and `127.0.0.1` each need the
+tokened URL once. Pick one and stay with it.
+
 To rotate it, delete `~/.photo_organizer/ui_token` and restart.
+
+### Stopping it
+
+Click **Quit** in the page, or press Ctrl+C in its terminal. If one is left
+running in the background and holds the port:
+
+```bash
+powershell -Command "Get-NetTCPConnection -LocalPort 8080 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"
+```
 
 For analysis you need a Gemini API key:
 
