@@ -162,7 +162,10 @@ class AnalysisConfig:
 
     # Where analyses are cached. Outside the source and the output tree, so
     # deleting the output and re-running costs nothing.
-    database_path: str = "~/.cache/photo_organizer/analysis.sqlite3"
+    # NOT under ~/.cache. A cache is by definition safe to delete, and this
+    # file is the opposite: it is the only record of analyses that cost real
+    # money, and losing it means paying for the whole library again.
+    database_path: str = "~/.photo_organizer/analysis.sqlite3"
 
     # Check every claimed summit against the peaks gazetteer. This proves a
     # name is real; it cannot prove it is the right one.

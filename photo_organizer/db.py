@@ -28,7 +28,29 @@ from .schema import SCHEMA_VERSION, PhotoAnalysis, unwrap_response
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DB = Path("~/.cache/photo_organizer/analysis.sqlite3").expanduser()
+DEFAULT_DB = Path("~/.photo_organizer/analysis.sqlite3").expanduser()
+
+# Where the database used to live. A cache directory is the wrong home for
+# the only copy of something that was paid for, so an existing file there is
+# moved rather than abandoned.
+LEGACY_DB = Path("~/.cache/photo_organizer/analysis.sqlite3").expanduser()
+
+
+def _adopt_legacy(path: Path) -> None:
+    """Move a database out of the old cache location, once."""
+    if path != DEFAULT_DB or path.exists() or not LEGACY_DB.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for suffix in ("", "-wal", "-shm"):
+            part = LEGACY_DB.with_name(LEGACY_DB.name + suffix)
+            if part.exists():
+                part.replace(path.with_name(path.name + suffix))
+        log.info("Moved the analysis database out of the cache to %s", path)
+    except OSError as exc:
+        # Not fatal: worst case the old rows are re-analysed. Never lose the
+        # original by half-moving it.
+        log.warning("Could not move %s to %s: %s", LEGACY_DB, path, exc)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS analysis (
@@ -93,6 +115,7 @@ class AnalysisStore:
 
     def __init__(self, path: Path = DEFAULT_DB) -> None:
         self.path = Path(path).expanduser()
+        _adopt_legacy(self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         with self._connect() as conn:

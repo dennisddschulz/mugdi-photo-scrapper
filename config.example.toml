@@ -117,7 +117,7 @@ gemini_api_key = ""
 # that a future schema change re-parses what is already stored instead of
 # re-requesting it. Never delete this file to "start clean" -- it is the
 # only copy of what was paid for.
-database_path = "~/.cache/photo_organizer/analysis.sqlite3"
+database_path = "~/.photo_organizer/analysis.sqlite3"
 
 # Check every claimed summit against the peaks gazetteer before it can
 # reach a folder name. Build it once with:

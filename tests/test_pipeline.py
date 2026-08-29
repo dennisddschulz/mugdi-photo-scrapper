@@ -2120,5 +2120,54 @@ class TestRicherTags(unittest.TestCase):
         self.assertFalse(any("IBAN" in t for t in tags))
 
 
+class TestDatabaseLocation(unittest.TestCase):
+    """The analysis database is not a cache and must not live in one."""
+
+    def test_the_default_is_not_under_a_cache_directory(self):
+        from photo_organizer.db import DEFAULT_DB
+
+        self.assertNotIn(".cache", str(DEFAULT_DB).replace("\\", "/"))
+        self.assertNotIn(".cache", Config().analysis.database_path)
+
+    def test_a_database_in_the_old_cache_location_is_adopted(self):
+        import photo_organizer.db as db
+        from photo_organizer.schema import PhotoAnalysis
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        legacy, current = root / "old" / "a.sqlite3", root / "new" / "a.sqlite3"
+        legacy.parent.mkdir(parents=True)
+
+        db.AnalysisStore(legacy).put("h1", Path("a.jpg"),
+                                     PhotoAnalysis(peak_name="Hannibalturm"))
+        original_default, original_legacy = db.DEFAULT_DB, db.LEGACY_DB
+        db.DEFAULT_DB, db.LEGACY_DB = current, legacy
+        try:
+            adopted = db.AnalysisStore(current)
+            self.assertEqual(adopted.get("h1").peak_name, "Hannibalturm")
+            self.assertFalse(legacy.exists(), "the old file should be moved")
+        finally:
+            db.DEFAULT_DB, db.LEGACY_DB = original_default, original_legacy
+
+    def test_adoption_never_destroys_the_original_on_failure(self):
+        import photo_organizer.db as db
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        legacy = root / "old" / "a.sqlite3"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b"not a database, but not ours to lose")
+
+        original_default, original_legacy = db.DEFAULT_DB, db.LEGACY_DB
+        # A destination that cannot be written to.
+        db.DEFAULT_DB = root / "old" / "a.sqlite3" / "impossible.sqlite3"
+        db.LEGACY_DB = legacy
+        try:
+            db._adopt_legacy(db.DEFAULT_DB)
+            self.assertTrue(legacy.exists())
+        finally:
+            db.DEFAULT_DB, db.LEGACY_DB = original_default, original_legacy
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

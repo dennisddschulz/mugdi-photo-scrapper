@@ -38,7 +38,12 @@ copy                           verified copy + tags written into the copies
 **Every photo is analysed exactly once in its life.** The result is cached in
 SQLite keyed by the photo's content hash, so a re-scan, a rename, a
 re-cluster, or deleting and rebuilding the output all cost nothing. The cache
-lives in `~/.cache/photo_organizer/analysis.sqlite3`, outside both trees.
+lives in `~/.photo_organizer/analysis.sqlite3`, outside both trees.
+
+**It is deliberately not under `~/.cache`.** A cache is by definition safe to
+delete; this file is the only record of analyses that cost real money. An
+existing database in the old cache location is moved there automatically on
+first run. Back it up with your photos — losing it means paying again.
 
 The cache keeps the **complete API reply**, not just the parsed fields, and
 the schema asks for **more than the pipeline currently uses** — visible place

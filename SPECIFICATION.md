@@ -339,6 +339,12 @@ skyline, so any sample misses events whose single identifiable frame was not
 picked. Duplicates are detected **before** analysis, so a burst of 30
 near-identical frames costs one analysis rather than 30.
 
+**R-A7b** The database must **not** live in a cache directory. A cache is by
+definition disposable and this file is the only record of what was paid for.
+Default: `~/.photo_organizer/analysis.sqlite3`. A database found in the old
+cache location is moved on first run, and a failed move leaves the original
+intact rather than half-copied.
+
 **R-A8** Analysed fields that are **not** written into files —
 `landmarks` (recognised, not read, and measured wrong), `place_names_visible`
 (already drives naming; on a guidebook page they name the region rather than
