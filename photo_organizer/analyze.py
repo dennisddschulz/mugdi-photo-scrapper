@@ -790,6 +790,18 @@ def preflight(
     settings = config.analysis
     checks: list[Check] = []
 
+    # State the setting that decides the size of the bill. A run once cost
+    # ten times what had been promised because this value lived in a config
+    # file that disagreed with the code default, and nothing said so.
+    checks.append(Check(
+        "Photos analysed per event", True,
+        (f"{settings.photos_per_event} chosen per event"
+         if settings.photos_per_event
+         else "EVERY photo -- this is the expensive setting")
+        + (f", from {config.loaded_from}" if config.loaded_from else ", built-in default"),
+        fatal=False,
+    ))
+
     # --- somewhere to write ---------------------------------------------
     output = Path(plan.output_root)
     try:
@@ -819,12 +831,17 @@ def preflight(
     store = store or AnalysisStore(Path(settings.database_path).expanduser())
     costing = pending_cost(plan, config, store, sample=400)
     pending = costing["pending"]
+    cost = costing["estimated_cost_usd"]
+    within_budget = cost <= settings.max_cost_usd
     checks.append(Check(
-        "Analysis cost is known", True,
-        f"{pending} to analyse, {costing['already_analysed']} already cached, "
-        f"about ${costing['estimated_cost_usd']:.2f}"
-        + (" (estimated from a sample)" if costing.get("sampled") else ""),
-        fatal=False,
+        "Cost is within the budget", within_budget,
+        f"{pending} photo(s) to analyse, {costing['already_analysed']} already "
+        f"cached: about ${cost:.2f}, budget ${settings.max_cost_usd:.2f}"
+        + (" (estimated from a sample)" if costing.get("sampled") else "")
+        + ("" if within_budget else
+           f". Reduce photos_per_event (currently "
+           f"{settings.photos_per_event or 'every photo'}) or raise "
+           f"max_cost_usd if you mean to spend this."),
     ))
 
     # --- will the upload fit? THE check that was missing ------------------

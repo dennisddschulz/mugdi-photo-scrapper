@@ -221,6 +221,17 @@ class AnalysisConfig:
     # answer here; the estimate is only as good as this number.
     cost_per_photo_usd: float = 0.0047
 
+    # A HARD CEILING on what one run may cost. The preflight refuses to start
+    # if the estimate exceeds it, before a single photo is encoded.
+    #
+    # This exists because it happened: a run was described as costing $3.50,
+    # and started at $30.86, because the code default said 4 photos per event
+    # while this file still said 0 -- and nothing checked. A number written in
+    # a README is not a control. This is.
+    #
+    # Raise it deliberately when you mean to spend more.
+    max_cost_usd: float = 5.0
+
     judge_duplicates: bool = False
 
     # Duplicates are copied into the SAME event folder as the frame they
