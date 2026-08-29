@@ -90,6 +90,19 @@ class ClusterConfig:
     # Events smaller than this are still kept, but flagged in the preview.
     small_event_threshold: int = 3
 
+    # Joining consecutive days that are one trip.
+    #
+    # The 12-hour rule above splits an overnight, so a hut approach and the
+    # climb the next morning become two events -- measured on this library, a
+    # three-day trip to the Aiguille Dibona became three, and only the first
+    # day was named correctly. Raising time_gap_hours globally would merge
+    # genuinely separate day trips instead.
+    #
+    # So: join events separated by no more than a night, up to a maximum
+    # trip length. 0 disables it.
+    trip_gap_hours: float = 18.0
+    trip_max_days: float = 3.0
+
 
 @dataclass
 class GeocodeConfig:
@@ -231,6 +244,15 @@ class AnalysisConfig:
     #
     # Raise it deliberately when you mean to spend more.
     max_cost_usd: float = 5.0
+
+    # After the paid analysis, read the text in photos of events it could
+    # not name. Local, free, about one photo a second, and it is what found
+    # "Aiguille Dibona" on a page in an event the model had placed in the
+    # Mont Blanc massif, 120 km away.
+    read_text_locally: bool = True
+    # How many photos of one event to read before giving up on it. It stops
+    # early as soon as a photo names a real place.
+    ocr_max_photos_per_event: int = 60
 
     judge_duplicates: bool = False
 

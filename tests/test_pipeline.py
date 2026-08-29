@@ -3522,5 +3522,100 @@ class TestCostEstimate(unittest.TestCase):
 
         self.assertGreater(estimate_cost_usd(1), estimate_cost_usd(0))
 
+class TestReadingTextLocally(unittest.TestCase):
+    """A guidebook page names a place outright, and costs nothing to read."""
+
+    def test_a_generic_name_is_not_specific_enough(self):
+        """An event was nearly named "Aiguille" -- a real gazetteer entry,
+        French for "needle", and a useless folder name."""
+        from photo_organizer.ocr import is_specific_enough
+
+        self.assertFalse(is_specific_enough("Aiguille"))
+        self.assertFalse(is_specific_enough("Dent"))
+        self.assertTrue(is_specific_enough("Aiguille Dibona"))
+        self.assertTrue(is_specific_enough("Salbitschijen"))
+
+    def test_the_most_specific_name_wins(self):
+        """Not the first one read. The first photo of a real event gave
+        "Aiguille" and a later one gave "Aiguille Dibona"."""
+        from photo_organizer.ocr import OcrResult, best_name
+
+        results = [
+            OcrResult(path=Path("a.jpg"), names=("Aiguille",)),
+            OcrResult(path=Path("b.jpg"), names=("Aiguille Dibona", "Aiguille")),
+        ]
+        name, hit = best_name(results)
+        self.assertEqual(name, "Aiguille Dibona")
+        self.assertEqual(hit.path.name, "b.jpg")
+
+    def test_nothing_specific_means_no_answer(self):
+        from photo_organizer.ocr import OcrResult, best_name
+
+        self.assertIsNone(best_name([OcrResult(path=Path("a.jpg"), names=("Dent",))]))
+        self.assertIsNone(best_name([]))
+
+
+class TestTripMerging(unittest.TestCase):
+    """A hut approach and the climb next morning are one outing."""
+
+    def _event(self, index, day, hour, place=None, rng=None, photos=3):
+        made = []
+        for i in range(photos):
+            photo = make_photo("%02d_%02d_%d.jpg" % (day, hour, i))
+            photo.timestamp = datetime(2019, 9, day, hour, i)
+            made.append(photo)
+        event = Event(index=index, photos=made)
+        event.place_name = place
+        event.mountain_range = rng
+        return event
+
+    def test_consecutive_days_join_when_one_knows_the_place(self):
+        """The real case: day one named Aiguille Dibona, day two did not."""
+        from photo_organizer.cluster import merge_trips
+
+        events = [self._event(1, 10, 18, place="Aiguille Dibona"),
+                  self._event(2, 11, 9)]
+        merged, joined = merge_trips(events, gap_hours=18, max_days=3)
+        self.assertEqual(joined, 1)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged[0].photos), 6)
+
+    def test_days_naming_different_places_stay_apart(self):
+        """Two trips, not one."""
+        from photo_organizer.cluster import merge_trips
+
+        events = [self._event(1, 10, 18, place="Aiguille Dibona"),
+                  self._event(2, 11, 9, place="Salbitschijen")]
+        merged, joined = merge_trips(events, gap_hours=18, max_days=3)
+        self.assertEqual(joined, 0)
+        self.assertEqual(len(merged), 2)
+
+    def test_two_unnamed_days_are_not_evidence_of_anything(self):
+        """Time alone merged 106 events on the real library, including a
+        day of socialising with the next day's hike."""
+        from photo_organizer.cluster import merge_trips
+
+        events = [self._event(1, 10, 18), self._event(2, 11, 9)]
+        merged, joined = merge_trips(events, gap_hours=18, max_days=3)
+        self.assertEqual(joined, 0)
+
+    def test_a_trip_cannot_grow_without_limit(self):
+        """Otherwise a fortnight of climbing becomes one folder."""
+        from photo_organizer.cluster import merge_trips
+
+        events = [self._event(i, 9 + i, 12, rng="Ecrins") for i in range(1, 8)]
+        merged, _joined = merge_trips(events, gap_hours=30, max_days=3)
+        for event in merged:
+            span = (event.end - event.start).total_seconds() / 86400
+            self.assertLessEqual(span, 3.0)
+
+    def test_a_long_gap_is_two_trips(self):
+        from photo_organizer.cluster import merge_trips
+
+        events = [self._event(1, 10, 12, rng="Ecrins"),
+                  self._event(2, 14, 12, rng="Ecrins")]
+        merged, joined = merge_trips(events, gap_hours=18, max_days=3)
+        self.assertEqual(joined, 0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

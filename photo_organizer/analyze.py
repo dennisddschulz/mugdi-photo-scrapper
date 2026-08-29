@@ -1033,6 +1033,22 @@ def analyze_plan(
         say("Every event already has a name from GPS; nothing to analyse.")
         return stats
 
+    # --- collect anything already paid for -------------------------------
+    # Batches submitted in an earlier session are still running on Google's
+    # side and are recorded in the database. Collect them FIRST: they are
+    # bought and paid for, and anything they cover must not be submitted
+    # again. This is why the job table exists, and for a while nothing
+    # actually called it -- so 1,328 paid-for results sat stranded.
+    try:
+        reclaimed = collect_open_jobs(plan, config, store=store, on_step=say)
+        if reclaimed.returned:
+            say(f"Collected {reclaimed.returned} result(s) from earlier batches.")
+    except Exception as exc:
+        # Never let this stop a run: the worst case is paying again, and
+        # stopping means not running at all.
+        log.warning("Could not collect earlier batches: %s", exc)
+        say(f"Could not collect earlier batches ({exc}); continuing.")
+
     # --- what needs analysing -------------------------------------------
     chosen: list[tuple[str, Photo]] = []
     for event in targets:
@@ -1265,6 +1281,53 @@ def analyze_plan(
     from .naming import deduplicate_names
 
     deduplicate_names(plan.events)
+    # --- read the text in what is still unnamed --------------------------
+    # Local, free, and the most reliable evidence there is: a guidebook page
+    # names a place outright. Measured, it is what turned an event the model
+    # had placed in the Mont Blanc massif into Aiguille Dibona, 120 km away
+    # in the Ecrins.
+    if settings.read_text_locally:
+        try:
+            read_events_locally(
+                plan, config, on_step=say, on_progress=on_progress,
+                should_cancel=should_cancel,
+            )
+        except Exception as exc:
+            log.warning("Local text reading failed: %s", exc)
+            say(f"Could not read text locally ({exc}); continuing.")
+
+    # --- join consecutive days that are one trip -------------------------
+    # After naming, so a merge can require evidence rather than just a gap.
+    if config.cluster.trip_gap_hours > 0:
+        from .cluster import merge_trips
+
+        before = len(plan.events)
+        plan.events, joined = merge_trips(
+            plan.events,
+            gap_hours=config.cluster.trip_gap_hours,
+            max_days=config.cluster.trip_max_days,
+        )
+        if joined:
+            say(
+                f"Joined {joined} event(s) into multi-day trips "
+                f"({before} events became {len(plan.events)})."
+            )
+            # Re-name whatever was joined, from everything now inside it.
+            for event in plan.events:
+                if event.proposed_name:
+                    continue
+                found = [
+                    known.get(p.content_key)
+                    for p in select_photos(event, settings.photos_per_event)
+                    if p.content_key and known.get(p.content_key)
+                ]
+                merged = summarise_event(
+                    event, found, min_probability=settings.min_peak_probability
+                )
+                if merged is not None:
+                    apply_to_event(event, merged, config,
+                                   consensus_location(found))
+
     say(
         f"Named: peak={stats.named_from_peak} crag={stats.named_from_crag} "
         f"region={stats.named_from_region} activity={stats.named_from_activity} "
@@ -1279,6 +1342,95 @@ def analyze_plan(
         "left without one."
     )
     return stats
+
+
+def read_events_locally(
+    plan: Plan,
+    config: Config,
+    events: Optional[Sequence[Event]] = None,
+    on_step: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[int, int, str], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> dict:
+    """Read the text in photos of events that have no confident place name.
+
+    This is the cheapest evidence in the project and the most reliable: a
+    guidebook page names a place outright, and costs nothing to read.
+
+    It runs AFTER the paid analysis, on what that could not name, because
+    OCR is slow (about one photo a second) and most events do not need it.
+    """
+    from .ocr import available, best_name, read_event, unavailable_reason
+    from .peaks import PeakIndex
+
+    settings = config.analysis
+
+    def say(message: str) -> None:
+        log.info("%s", message)
+        if on_step:
+            on_step(message)
+
+    if not available():
+        say(unavailable_reason())
+        return {"read": 0, "named": 0, "skipped": True}
+
+    peak_index = PeakIndex.load() if settings.use_gazetteer else None
+    if peak_index is None or not len(peak_index):
+        say("No gazetteer, so text in photos cannot be checked against real places.")
+        return {"read": 0, "named": 0, "skipped": True}
+
+    targets = [
+        event for event in (events if events is not None else plan.events)
+        # Only what is still unplaced. An event already named from a summit
+        # or a crag does not need a second opinion that costs a minute.
+        if not event.place_name
+    ]
+    if not targets:
+        say("Every event already has a place name; no text to read.")
+        return {"read": 0, "named": 0, "skipped": False}
+
+    say(
+        f"Reading text in photos of {len(targets)} unnamed event(s). "
+        "This is local and free, about one photo a second."
+    )
+
+    read_count = 0
+    named = 0
+    for position, event in enumerate(targets, start=1):
+        if should_cancel is not None and should_cancel():
+            say("Stopped reading.")
+            break
+        if on_progress:
+            on_progress(position, len(targets), f"event {event.index}")
+
+        results = read_event(
+            list(event.photos),
+            peak_index,
+            countries=settings.peak_countries,
+            max_photos=settings.ocr_max_photos_per_event,
+            should_cancel=should_cancel,
+        )
+        read_count += len(results)
+        # The most specific name found anywhere in the event, not the first.
+        chosen = best_name(results)
+        if chosen is None:
+            continue
+        name, hit = chosen
+        peak = peak_index.verify(name, countries=settings.peak_countries)
+        event.place_name = name
+        event.name_source = "peak"
+        if peak is not None:
+            event.enriched_lat, event.enriched_lon = peak.lat, peak.lon
+            event.country_code = peak.country or event.country_code
+        event.evidence.append(
+            f"peak: {name} (read from text in {hit.path.name} by local OCR; "
+            "verified in gazetteer)"
+        )
+        named += 1
+        say(f"  event {event.index}: {name}, read from {hit.path.name}")
+
+    say(f"Read {read_count} photo(s); named {named} event(s) from text.")
+    return {"read": read_count, "named": named, "skipped": False}
 
 
 def collect_open_jobs(

@@ -322,6 +322,58 @@ full one drops messages rather than blocking, since the plan is reloaded when
 the run finishes anyway. A test publishes 1,000 messages to a listener that
 never reads and asserts it stays fast.
 
+## Reading the text in photos — locally and for nothing
+
+A guidebook page names a place outright. That is the most reliable evidence
+in this project, and Tesseract reads it for free.
+
+Measured on a real failure: an event on 11 September 2019 was named
+**Mont-Blanc-Massif** because the model recognised "Aiguille de la
+République" — a real peak, in the wrong massif, **120 km** from where the
+photos were taken. The event contained a guidebook page naming **Aiguille
+Dibona**. That photo scored 0.71 on the scenic scale, one of the lowest in
+the event, so it was never among the four sent for analysis.
+
+OCR found it in **38 seconds**, locally:
+
+```
+event: Aiguille Dibona, read from IMG_20190911_201210.jpg
+coords: 44.9632445, 6.2428893      (Écrins, not Mont Blanc)
+```
+
+It runs after the paid analysis, only on events still unnamed, at about one
+photo per second.
+
+**There is no page detector, and there does not need to be one.** Four
+attempts to find pages from pixels failed: brightness and edges scored a
+portrait of a person 3.17 and a real page 0.0; adding saturation still scored
+the page 0.0; and at higher resolution the "pages" turned out to be climbers
+on grey granite. Grey rock and printed paper are statistically identical, and
+a climbing library is full of grey rock. OCR needs no detector because it
+*is* one — over rock it returns `SESS JURE SaaS Paes iets Seen`, which matches
+nothing in a gazetteer of real places.
+
+One refinement that mattered: it does **not** stop at the first name found.
+The first photo of that event yielded the bare word "Aiguille" — a real
+gazetteer entry, French for "needle", and a useless folder name. Names are
+ranked by how specific they are.
+
+## Multi-day trips
+
+The 12-hour rule splits an overnight, so a hut approach and the climb next
+morning become two events. On the real library one three-day trip became
+three, and **only the first day was named correctly**.
+
+Raising `time_gap_hours` globally is the wrong fix — it merges genuinely
+separate day trips. Instead, consecutive events are joined **after naming**,
+when there is evidence to justify it: the gap must be no more than a night,
+the trip must fit inside `trip_max_days` (3), and **one event must know where
+it was while the other does not contradict it**.
+
+That ordering is the whole design. Merging during clustering, on time alone,
+joined 106 events on this library — including a day of socialising with the
+next day's hike. Two unnamed days are not evidence of anything.
+
 ## Choosing which photos to analyse
 
 Naming 379 events does not need 13,748 analyses. It needs a few photos of

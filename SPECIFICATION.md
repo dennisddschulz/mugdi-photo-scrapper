@@ -632,3 +632,21 @@ $2.75 quoted against $32 actual.
 **R-A25** Every dialog that quotes a cost uses that configurable rate, and the
 documentation must say plainly that it is an order of magnitude rather than a
 price list, and that a small first batch is the way to calibrate it.
+
+**R-F20** After the paid analysis, events still without a place name have the
+text in their photos read locally with Tesseract, and names found are verified
+against the gazetteer. Free, about one photo per second, and it is what turned
+an event misnamed "Mont Blanc Massif" into Aiguille Dibona, 120 km away.
+
+**R-F21** There must be NO pixel-based page detector. Four attempts failed on
+real data; grey rock and printed paper are statistically identical. OCR is its
+own detector: gibberish read off rock matches nothing in a gazetteer.
+
+**R-F22** OCR does not stop at the first name found, and names must be
+specific: at least two words, or a single word of 11+ characters. An event was
+nearly named "Aiguille".
+
+**R-F23** Multi-day trips are joined AFTER naming, never during clustering.
+The gap must be at most a night, the trip must fit inside `trip_max_days`, and
+one event must know its place while the other does not contradict it. Merging
+on time alone joined 106 unrelated events.
