@@ -573,17 +573,41 @@ class GeminiBatch:
         result.raw[key] = entry
 
 
-def estimate_cost_usd(images: int, batch: bool = True) -> float:
-    """Rough order-of-magnitude cost, for showing before a run starts.
+# What one photo actually costs, measured against a real bill rather than
+# assumed from a pricing page.
+#
+# The first version guessed $0.0004 per image. Reconciled against the
+# account: 23 requests (20 interactive, 3 batch) had been billed $0.10, so
+# the real rate is about $0.0047 -- TWELVE TIMES the guess. On this library
+# that is the difference between quoting $2.75 and quoting $32.
+#
+# It is a small sample and may include fixed charges, so treat it as an
+# order of magnitude, not a price list. What it is definitely not is
+# $0.0004. Override with `cost_per_photo_usd` once you have a bill of your
+# own to divide.
+MEASURED_COST_PER_PHOTO_USD = 0.0047
 
-    Deliberately approximate and labelled as such: token pricing changes and
-    image token counts vary. The purpose is to stop someone submitting
-    14,000 photos without any sense of the bill, not to predict it exactly.
+# For reference, from real replies: 1,491 prompt tokens and ~420 output
+# tokens per photo. Kept so the number above can be sanity-checked against
+# published per-token pricing when it changes.
+TOKENS_PER_PHOTO_IN = 1491
+TOKENS_PER_PHOTO_OUT = 420
+
+
+def estimate_cost_usd(
+    images: int,
+    batch: bool = True,
+    per_photo_usd: float = MEASURED_COST_PER_PHOTO_USD,
+) -> float:
+    """Approximate cost, from a measured rate rather than a guessed one.
+
+    Deliberately approximate and labelled as such wherever it is shown: the
+    purpose is to stop someone submitting 14,000 photos with no sense of the
+    bill. The previous guess was twelve times too low, which is exactly the
+    failure this is meant to prevent.
+
+    Not rounded. Rounding to cents inside the calculation made "one photo
+    pending" and "nothing pending" both read as $0.00, and that is the
+    distinction the confirmation dialog turns on.
     """
-    # ~300 tokens per 1024px image plus prompt, ~250 output tokens.
-    per_image_usd = 0.0004
-    # Not rounded here. Rounding to cents inside the calculation made "one
-    # photo pending" and "nothing pending" both read as $0.00, and that is
-    # exactly the distinction the confirmation dialog turns on. Callers
-    # round for display.
-    return images * per_image_usd * (0.5 if batch else 1.0)
+    return images * per_photo_usd * (0.5 if batch else 1.0)

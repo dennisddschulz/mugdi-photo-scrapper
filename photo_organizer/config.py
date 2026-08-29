@@ -207,6 +207,16 @@ class AnalysisConfig:
     # compared by eye, and one analysis per group is what most people want
     # to pay for. Turn it on to have the choice made for you (measured:
     # 627 extra photos, $0.13 for this library).
+    # What one photo costs to analyse, in US dollars, at interactive rates.
+    # The default is measured against a real bill, not taken from a pricing
+    # page: 23 requests had been charged $0.10, so about $0.0047 each. The
+    # original guess of $0.0004 was twelve times too low and would have
+    # quoted $2.75 for a library that costs nearer $32.
+    #
+    # Divide your own bill by the number of photos analysed and put the
+    # answer here; the estimate is only as good as this number.
+    cost_per_photo_usd: float = 0.0047
+
     judge_duplicates: bool = False
 
     # Duplicates are copied into the SAME event folder as the frame they

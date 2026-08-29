@@ -734,7 +734,8 @@ def pending_cost(
         "already_analysed": already,
         "pending": pending_count,
         "estimated_cost_usd": estimate_cost_usd(
-            pending_count, batch=settings.use_batch
+            pending_count, batch=settings.use_batch,
+            per_photo_usd=settings.cost_per_photo_usd,
         ),
         "hashed_now": hashed_now,
         "sampled": sampled,
@@ -1038,7 +1039,10 @@ def analyze_plan(
             )
             pending = pending[: settings.max_photos_per_run]
 
-    stats.estimated_cost_usd = estimate_cost_usd(len(pending), batch=settings.use_batch)
+    stats.estimated_cost_usd = estimate_cost_usd(
+        len(pending), batch=settings.use_batch,
+        per_photo_usd=settings.cost_per_photo_usd,
+    )
 
     # --- submit ----------------------------------------------------------
     if pending:

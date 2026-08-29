@@ -1111,7 +1111,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 "already_analysed": None,
                 "pending": images,
                 "estimated_cost_usd": estimate_cost_usd(
-                    images, batch=state.config.analysis.use_batch),
+                    images, batch=state.config.analysis.use_batch,
+                    per_photo_usd=state.config.analysis.cost_per_photo_usd),
                 "note": "upper bound -- nothing has been scanned yet, so any "
                         "photos already in the cache are not yet discounted",
             })

@@ -622,3 +622,13 @@ inside `details`, and a 400-character limit cut off exactly that.
 **R-P7** The preflight must attempt the REAL operation, not a free proxy for
 it. Listing models succeeds on the free tier and proved nothing; the preflight
 now creates a one-photo batch, which is real work whose result is cached.
+
+**R-A24** The cost estimate must be derived from a MEASURED rate, not a
+guessed one, and the rate must be configurable. The original guess of $0.0004
+per photo was twelve times too low: reconciled against a real bill, 23
+requests had been charged $0.10, about $0.0047 each. On this library that is
+$2.75 quoted against $32 actual.
+
+**R-A25** Every dialog that quotes a cost uses that configurable rate, and the
+documentation must say plainly that it is an order of magnitude rather than a
+price list, and that a small first batch is the way to calibrate it.

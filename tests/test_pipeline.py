@@ -3455,5 +3455,45 @@ class TestQuotaHandling(unittest.TestCase):
         source = inspect.getsource(GeminiBatch._request)
         self.assertNotIn("[:400]", source)
 
+class TestCostEstimate(unittest.TestCase):
+    """The estimate was twelve times too low, quoted all day as fact."""
+
+    def test_the_rate_comes_from_a_real_bill(self):
+        """23 requests had been charged $0.10: about $0.0047 each. The
+        original guess of $0.0004 would have quoted $2.75 for a library
+        that costs nearer $32."""
+        from photo_organizer.batch import MEASURED_COST_PER_PHOTO_USD
+
+        self.assertGreater(MEASURED_COST_PER_PHOTO_USD, 0.001,
+                           "the guessed rate was an order of magnitude low")
+
+    def test_batch_is_half_of_interactive(self):
+        from photo_organizer.batch import estimate_cost_usd
+
+        self.assertAlmostEqual(estimate_cost_usd(100, batch=True),
+                               estimate_cost_usd(100, batch=False) / 2)
+
+    def test_the_rate_is_configurable(self):
+        """It is only as good as the bill you divided to get it."""
+        from photo_organizer.batch import estimate_cost_usd
+
+        self.assertAlmostEqual(
+            estimate_cost_usd(1000, batch=False, per_photo_usd=0.01), 10.0)
+        self.assertEqual(Config().analysis.cost_per_photo_usd,
+                         __import__("photo_organizer.batch", fromlist=["x"])
+                         .MEASURED_COST_PER_PHOTO_USD)
+
+    def test_nothing_pending_costs_nothing(self):
+        from photo_organizer.batch import estimate_cost_usd
+
+        self.assertEqual(estimate_cost_usd(0), 0.0)
+
+    def test_one_photo_is_distinguishable_from_none(self):
+        """Rounding to cents inside the calculation made them identical,
+        and that is the distinction the confirmation dialog turns on."""
+        from photo_organizer.batch import estimate_cost_usd
+
+        self.assertGreater(estimate_cost_usd(1), estimate_cost_usd(0))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
