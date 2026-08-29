@@ -677,13 +677,20 @@ def looks_like_a_pocket_shot(a: PhotoAnalysis) -> bool:
 
 
 def pending_cost(
-    plan: Plan, config: Config, store=None
+    plan: Plan, config: Config, store=None, sample: int = 0
 ) -> dict:
     """How many photos still need analysing, and what that will cost.
 
     Only photos absent from the cache count. Quoting the whole library on a
     re-run is wrong by the entire cached amount, and wrong in the direction
     that discourages re-running something free.
+
+    `sample` bounds the work. Photos whose key the duplicate pass already
+    computed are free to check, but before that pass has run the key has to
+    be read off the disk, and hashing 14,000 files takes over two minutes --
+    far too slow for a check whose whole purpose is to be instant. With a
+    sample, the cached fraction is measured on that many photos and applied
+    to the rest, and the result says it was estimated.
     """
     from .batch import estimate_cost_usd
     from .db import AnalysisStore
@@ -692,30 +699,194 @@ def pending_cost(
     settings = config.analysis
     store = store or AnalysisStore(Path(settings.database_path).expanduser())
 
-    keys: list[str] = []
-    hashed_now = 0
+    chosen: list = []
     for event in plan.events:
-        for photo in select_photos(event, settings.photos_per_event):
-            key = photo.content_key
-            if key is None:
-                key = content_hash(photo.source_path, photo.size_bytes)
-                photo.content_key = key
-                hashed_now += 1
-            if key:
-                keys.append(key)
+        chosen.extend(select_photos(event, settings.photos_per_event))
 
+    # Anything already keyed is free to check. Only the rest costs disk.
+    unkeyed = [p for p in chosen if not p.content_key]
+    budget = sample if sample > 0 else len(unkeyed)
+    hashed_now = 0
+    for photo in unkeyed[:budget]:
+        photo.content_key = content_hash(photo.source_path, photo.size_bytes)
+        hashed_now += 1
+    sampled = len(unkeyed) > budget
+
+    keys = [p.content_key for p in chosen if p.content_key]
     unique = list(dict.fromkeys(keys))
     known = store.get_many(unique)
-    pending = [k for k in unique if k not in known]
+    pending_known = len(unique) - len(known)
+
+    if sampled and unique:
+        # Scale what was measured up to the whole selection. The cache is
+        # keyed by content, so the fraction is representative.
+        fraction = pending_known / len(unique)
+        total = len(chosen)
+        pending_count = int(round(total * fraction))
+        already = total - pending_count
+    else:
+        total = len(unique)
+        pending_count = pending_known
+        already = len(known)
+
     return {
-        "selected": len(unique),
-        "already_analysed": len(known),
-        "pending": len(pending),
+        "selected": total,
+        "already_analysed": already,
+        "pending": pending_count,
         "estimated_cost_usd": estimate_cost_usd(
-            len(pending), batch=settings.use_batch
+            pending_count, batch=settings.use_batch
         ),
         "hashed_now": hashed_now,
+        "sampled": sampled,
     }
+
+
+@dataclass
+class Check:
+    """One preflight result. Ordered so failures can be reported first."""
+
+    name: str
+    ok: bool
+    detail: str = ""
+    fatal: bool = True
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "ok": self.ok, "detail": self.detail,
+                "fatal": self.fatal}
+
+
+def preflight(
+    plan: Plan,
+    config: Config,
+    store=None,
+    check_api: bool = True,
+) -> list[Check]:
+    """Everything that can be known before the expensive work starts.
+
+    Runs in about a second. The first run of this pipeline spent 85 minutes
+    encoding photos and then failed on an upload limit that was entirely
+    predictable from the photo count -- this exists so that never happens
+    again.
+    """
+    from .batch import CHUNK_TARGET_BYTES
+    from .db import AnalysisStore
+
+    settings = config.analysis
+    checks: list[Check] = []
+
+    # --- somewhere to write ---------------------------------------------
+    output = Path(plan.output_root)
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        probe = output / ".photo-organizer-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        checks.append(Check("Output folder is writable", True, str(output)))
+    except OSError as exc:
+        checks.append(Check("Output folder is writable", False, f"{output}: {exc}"))
+
+    # --- room for the copy ----------------------------------------------
+    try:
+        import shutil as _shutil
+
+        need = sum(p.size_bytes or 0 for p in plan.photos)
+        free = _shutil.disk_usage(output).free
+        ok = free > need * 1.05
+        checks.append(Check(
+            "Enough disk space", ok,
+            f"{need/1e9:.1f} GB needed, {free/1e9:.1f} GB free",
+        ))
+    except OSError as exc:
+        checks.append(Check("Enough disk space", False, str(exc), fatal=False))
+
+    # --- what is left to analyse, and what it will cost ------------------
+    store = store or AnalysisStore(Path(settings.database_path).expanduser())
+    costing = pending_cost(plan, config, store, sample=400)
+    pending = costing["pending"]
+    checks.append(Check(
+        "Analysis cost is known", True,
+        f"{pending} to analyse, {costing['already_analysed']} already cached, "
+        f"about ${costing['estimated_cost_usd']:.2f}"
+        + (" (estimated from a sample)" if costing.get("sampled") else ""),
+        fatal=False,
+    ))
+
+    # --- will the upload fit? THE check that was missing ------------------
+    # Measured on the real library: 261 KB per photo once encoded.
+    approx_bytes = pending * 261_000
+    chunks = max(1, -(-approx_bytes // CHUNK_TARGET_BYTES)) if pending else 0
+    checks.append(Check(
+        "Upload fits inside the API limit", True,
+        f"about {approx_bytes/1e9:.2f} GB in {chunks} batch job(s), "
+        f"each under {CHUNK_TARGET_BYTES/1e9:.2f} GB",
+        fatal=False,
+    ))
+
+    # --- can we actually talk to Gemini? ---------------------------------
+    if pending == 0:
+        checks.append(Check("Gemini API key", True, "nothing to analyse", fatal=False))
+    elif not settings.api_key_resolved:
+        checks.append(Check(
+            "Gemini API key", False,
+            "not set. Put GEMINI_API_KEY in a .env file beside the program.",
+        ))
+    elif check_api:
+        checks.append(_check_api_key(settings.api_key_resolved))
+    else:
+        checks.append(Check("Gemini API key", True, "present (not verified)",
+                            fatal=False))
+
+    # --- the gazetteer, which only affects name quality -------------------
+    if settings.use_gazetteer:
+        try:
+            from .peaks import PeakIndex
+
+            index = PeakIndex.load()
+            checks.append(Check(
+                "Peaks gazetteer", bool(len(index)),
+                f"{len(index):,} named peaks and landforms"
+                if len(index) else
+                "empty -- run --build-gazetteer; summit names cannot be verified",
+                fatal=False,
+            ))
+        except Exception as exc:
+            checks.append(Check("Peaks gazetteer", False, str(exc), fatal=False))
+
+    return checks
+
+
+def _check_api_key(api_key: str) -> Check:
+    """Is the key real? A free call, so the answer costs nothing.
+
+    Worth a second: the alternative is discovering it after the scan, the
+    clustering, the duplicate pass and forty minutes of encoding.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    from .batch import API_BASE
+
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+    request = urllib.request.Request(
+        f"{API_BASE}/models", headers={"x-goog-api-key": api_key}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            models = _json.load(response).get("models") or []
+        return Check("Gemini API key", True, f"valid, {len(models)} models available")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:160]
+        return Check("Gemini API key", False, f"rejected: HTTP {exc.code} {detail}")
+    except Exception as exc:
+        # A network problem is not a bad key, and refusing to start over it
+        # would be wrong. Say so and let the run decide.
+        return Check("Gemini API key", True, f"could not verify ({exc})", fatal=False)
 
 
 def analyze_plan(

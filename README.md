@@ -583,6 +583,33 @@ full one drops messages rather than blocking, since the plan is reloaded when
 the run finishes anyway. A test publishes 1,000 messages to a listener that
 never reads and asserts it stays fast.
 
+## Fail fast
+
+Before any expensive work, a preflight runs in about **two seconds** and
+refuses to start if something is already known to be wrong:
+
+```
+[ok] Output folder is writable          C:\FotosTempOrganized
+[ok] Enough disk space                  50.2 GB needed, 149.1 GB free
+[ok] Analysis cost is known             13825 to analyse, about $2.77
+[ok] Upload fits inside the API limit   about 3.61 GB in 3 batch jobs, each under 1.47 GB
+[ok] Gemini API key                     valid, 50 models available
+[ok] Peaks gazetteer                    125,572 named peaks and landforms
+```
+
+**That fourth line is why this exists.** The first real run spent 85 minutes
+encoding photos and then died on an upload limit that was predictable from the
+photo count in the first second. Every fact needed to see it coming was
+available before any work began.
+
+The API key is verified with a real call (free), because "not set" and "set
+but rejected" are different problems and both should surface before the scan,
+not after it. A network failure is reported as a warning rather than a
+blocker — that is not a bad key.
+
+Counting what is already cached would mean hashing every file, which took
+150 seconds. It samples 400 photos and scales, and says when it did so.
+
 ## What the first real run found
 
 Four defects, none of which a small test could have caught. Recorded because

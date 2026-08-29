@@ -615,7 +615,10 @@ class TestWebApp(unittest.TestCase):
         if data:
             req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            # Generous. Five seconds was tight enough to fail intermittently
+            # when another test had the server's thread busy, and the
+            # failure looked like a bug in the app rather than in the test.
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()

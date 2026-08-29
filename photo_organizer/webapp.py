@@ -778,6 +778,10 @@ class AppHandler(BaseHTTPRequestHandler):
             self._stream_events()
             return
 
+        if route == "/api/preflight":
+            self._preflight()
+            return
+
         if route == "/api/estimate":
             self._estimate()
             return
@@ -1030,6 +1034,24 @@ class AppHandler(BaseHTTPRequestHandler):
         ok, message = state.start_job("Build plan", work)
         self._json(200 if ok else 409, {"ok": ok, "message": message})
 
+    def _preflight(self) -> None:
+        """Everything that can fail, checked in about two seconds."""
+        from .analyze import preflight
+
+        state = self.state
+        if state.plan is None:
+            self._json(400, {"error": "run the pipeline first, then check"})
+            return
+        try:
+            checks = [c.to_dict() for c in preflight(state.plan, state.config)]
+        except Exception as exc:
+            self._json(500, {"error": f"preflight failed: {exc}"})
+            return
+        self._json(200, {
+            "checks": checks,
+            "ready": not any(c["fatal"] and not c["ok"] for c in checks),
+        })
+
     def _stream_events(self) -> None:
         """Server-sent events: one line per update, until the client leaves.
 
@@ -1175,6 +1197,25 @@ class AppHandler(BaseHTTPRequestHandler):
                 job.say(f"  {len(plan.events)} event(s), {plan.photo_count} photo(s)")
             if job.cancelled:
                 return
+
+            # --- fail fast --------------------------------------------
+            # Everything that can be known is checked here, in about two
+            # seconds. The first real run spent 85 minutes encoding and then
+            # died on an upload limit that was predictable from the photo
+            # count alone.
+            from .analyze import preflight
+
+            job.step = "preflight"
+            job.say("Checking before starting:")
+            problems = []
+            for check in preflight(plan, config):
+                mark = "ok" if check.ok else ("FAILED" if check.fatal else "warning")
+                job.say(f"  [{mark}] {check.name}: {check.detail}")
+                if not check.ok and check.fatal:
+                    problems.append(f"{check.name}: {check.detail}")
+            if problems:
+                job.say("Stopping before any work is done. Nothing was written.")
+                raise RuntimeError("Preflight failed -- " + "; ".join(problems))
 
             # --- duplicates, so the paid step skips repeats ------------
             # Also reused: the marks live on the photo objects, so re-running

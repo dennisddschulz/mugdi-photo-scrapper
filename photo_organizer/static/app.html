@@ -556,11 +556,35 @@ $("allBtn").onclick = async () => {
   }
   // One dialog, stating what it will do. This is the preview and the
   // consent in a single step, which is what makes the typed word unnecessary.
+  // Check first, and say so. Two seconds here beats forty minutes of work
+  // followed by a failure that was predictable from the start.
+  toast("Checking before starting...");
+  let pf = null;
+  try { pf = await jget("/api/preflight"); } catch (e) { /* no plan yet */ }
+  if (pf && pf.checks) {
+    const bad = pf.checks.filter((c) => !c.ok && c.fatal);
+    const warn = pf.checks.filter((c) => !c.ok && !c.fatal);
+    const lines = (list) => list
+      .map((c) => "  " + c.name + ": " + c.detail)
+      .join("\n");
+    if (bad.length) {
+      alert("Cannot start:\n\n" + lines(bad)
+        + "\n\nNothing has been done. Fix these and try again.");
+      return;
+    }
+    if (warn.length && !confirm("Warnings:\n\n" + lines(warn)
+        + "\n\nContinue anyway?")) return;
+  }
   const est = await jget("/api/estimate");
   const n = est.selected || 0;
   const cost = (est.estimated_cost_usd || 0).toFixed(2);
   // Before a scan there is no plan, so the cache cannot be consulted yet and
   // this figure is an upper bound. Say so rather than quoting it as fact.
+  const checkLine = pf && pf.checks
+    ? pf.checks
+        .map((c) => "  " + (c.ok ? "ok" : "!!") + "  " + c.name + ": " + c.detail)
+        .join("\n") + "\n\n"
+    : "";
   const costLine = est.known
     ? `  ${est.pending} of ${est.selected} photo(s) still need analysing: about $${cost}.
 ` +
@@ -584,7 +608,7 @@ $("allBtn").onclick = async () => {
     `Gemini, then copy everything into the output folder.
 
 ` +
-    costLine + `
+    checkLine + costLine + `
 ` +
     `Your originals are not touched. Duplicates are set aside for review,
 ` +

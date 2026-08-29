@@ -20,7 +20,7 @@ import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from .models import Photo, Plan
 
@@ -176,6 +176,20 @@ def copy_plan(
             else None
         )
 
+        # Which cache key describes each kept frame, so a duplicate can
+        # borrow the analysis of the photo it duplicates. Built once per
+        # event; the alternative is hashing the keeper again for every
+        # duplicate of it.
+        keeper_keys: dict[str, str] = {}
+        for candidate in event.photos:
+            if getattr(candidate, "duplicate_role", None) in (None, "keep"):
+                key = candidate.content_key or content_hash(
+                    candidate.source_path, candidate.size_bytes
+                )
+                if key:
+                    candidate.content_key = key
+                    keeper_keys[str(candidate.source_path)] = key
+
         # One analysis per event supplies the tags shared by all its photos.
         event_tags = [t for t, _score in (event.tag_summary or [])]
         if event.mountain_range:
@@ -199,6 +213,15 @@ def copy_plan(
                     photo, output_root, stats, deep_verify,
                     destination=destination,
                     beside_original=config.analysis.duplicates_beside_original,
+                    # Everything the tagged path gets. A duplicate is the
+                    # same picture as the frame that was analysed, so the
+                    # same description applies to it.
+                    store=store if tagging else None,
+                    keeper_key=keeper_keys.get(getattr(photo, "duplicate_of", None)),
+                    event_tags=event_tags,
+                    event_title=event.place_name or event.effective_name,
+                    event_location=event_location,
+                    tag_stats=tag_stats,
                 )
                 continue
 
@@ -306,6 +329,12 @@ def _copy_duplicate(
     deep: bool,
     destination: Optional[Path] = None,
     beside_original: bool = True,
+    store=None,
+    keeper_key: Optional[str] = None,
+    event_tags: Sequence[str] = (),
+    event_title: Optional[str] = None,
+    event_location: Optional[tuple] = None,
+    tag_stats=None,
 ) -> None:
     """Put a suspected duplicate where it can actually be judged.
 
@@ -337,14 +366,37 @@ def _copy_duplicate(
     except OSError as exc:
         stats.errors.append(f"{photo.source_path.name}: {exc}")
         return
-    if verify_copy(photo.source_path, target, deep=deep):
-        stats.duplicates_copied += 1
-        stats.bytes_copied += photo.size_bytes or 0
-    else:
+    if not verify_copy(photo.source_path, target, deep=deep):
         stats.verify_failures += 1
         try:
             target.unlink()
         except OSError:
             pass
+        return
+
+    stats.duplicates_copied += 1
+    stats.bytes_copied += photo.size_bytes or 0
+
+    # Inherit the analysis of the frame this duplicates. Without it a burst
+    # of five leaves one searchable photo and four blanks beside it.
+    if store is None or not keeper_key:
+        return
+    analysis = store.get(keeper_key)
+    if analysis is None:
+        return
+    from . import metadata as meta
+
+    if meta.write_analysis(
+        target,
+        analysis,
+        output_root=output_root,
+        event_tags=list(event_tags),
+        event_title=event_title,
+        event_location=event_location,
+        stats=tag_stats,
+    ):
+        stats.tagged += 1
+    else:
+        stats.tag_failures += 1
 
 

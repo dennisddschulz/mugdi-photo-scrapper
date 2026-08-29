@@ -595,3 +595,16 @@ user must perform. `duplicates_beside_original = false` restores the old tree.
 analyse every frame of a burst is what detecting them was meant to avoid.
 `judge_duplicates = true` opts in to analysing all of them so the keeper is
 chosen on photographic merit rather than file size.
+
+**R-A20** A duplicate inherits the analysis of the frame that WAS analysed.
+Only one photo per group is sent, so without this a burst of five produces one
+searchable photo and four blanks beside it. They are the same picture.
+
+**R-P5** A preflight runs before any expensive work and blocks the run on a
+fatal failure: output writable, disk space, cost known, upload size within the
+API limit, API key valid, gazetteer present. It must complete in seconds --
+counting cached photos exactly took 150 seconds, so it samples and says so.
+
+**R-P6** The API key is verified with a real call. "Not set" and "set but
+rejected" are different problems and both must surface before the scan. A
+network failure is a warning, not a blocker.
