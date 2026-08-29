@@ -661,3 +661,13 @@ others. A single pass is a coin toss.
 ranks an event's photos by word count, and only the best few get the full
 treatment. The ranking is not a classifier -- rock and pages overlap -- and
 does not need to be, because the gazetteer discards gibberish.
+
+**R-P8** The preflight reports when the output folder already contains files,
+with the count and size, because a run writes correctly-named folders BESIDE
+old ones rather than replacing them. Measured after one such run: 13,825
+leftover files and 46.7 GB.
+
+**R-P9** The tool must NEVER delete the output folder, not even to make room
+for a clean run. Those files are copies, but they are still photographs.
+Clearing the output is the user's decision -- it is their recovery story, and
+the tool's job is to say when it matters, not to act.

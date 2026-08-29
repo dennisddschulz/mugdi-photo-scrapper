@@ -480,6 +480,7 @@ refuses to start if something is already known to be wrong:
 
 ```
 [ok] Output folder is writable          C:\FotosTempOrganized
+[!!] Output folder is empty             13,825 files, 50.2 GB already there
 [ok] Enough disk space                  50.2 GB needed, 149.1 GB free
 [ok] Analysis cost is known             13825 to analyse, about $2.77
 [ok] Upload fits inside the API limit   about 3.61 GB in 3 batch jobs, each under 1.47 GB
@@ -487,7 +488,13 @@ refuses to start if something is already known to be wrong:
 [ok] Peaks gazetteer                    125,572 named peaks and landforms
 ```
 
-**That fourth line is why this exists.** The first real run spent 85 minutes
+**The tool never deletes the output folder for you**, not even to make room.
+It is full of copies, but they are still photographs, and removing them is
+your decision — the same rule that keeps it away from your source. What it
+does is tell you before a run that there is already a library in there, so
+you are not surprised by two versions side by side afterwards.
+
+**That fifth line is why the preflight exists.** The first real run spent 85 minutes
 encoding photos and then died on an upload limit that was predictable from the
 photo count in the first second. Every fact needed to see it coming was
 available before any work began.

@@ -813,6 +813,35 @@ def preflight(
     except OSError as exc:
         checks.append(Check("Output folder is writable", False, f"{output}: {exc}"))
 
+    # --- is there already a library in there? ----------------------------
+    # A previous run's output does not stop this one, but it changes what you
+    # get: this run writes correctly-named folders BESIDE the old ones rather
+    # than replacing them, so the result is two libraries in one folder.
+    # Measured after one such run: 13,825 files and 46.7 GB of leftovers.
+    #
+    # This warns rather than deletes. The tool does not remove photographs,
+    # not even copies of them -- deleting the output is the user's decision
+    # and their recovery story.
+    try:
+        existing = [p for p in output.rglob("*") if p.is_file()]
+        if existing:
+            size = sum(p.stat().st_size for p in existing)
+            stale = sum(
+                1 for d in output.iterdir()
+                if d.is_dir() and d.name.startswith(("_duplicates", "_rejected"))
+            )
+            checks.append(Check(
+                "Output folder is empty", False,
+                f"{len(existing):,} file(s), {size/1e9:.1f} GB already in "
+                f"{output}. This run will add correctly-named folders BESIDE "
+                f"them, not replace them. Delete the folder first for a clean "
+                f"library; nothing in your source is affected."
+                + (f" ({stale} review folder(s) present.)" if stale else ""),
+                fatal=False,
+            ))
+    except OSError as exc:
+        log.debug("Could not inspect the output folder: %s", exc)
+
     # --- room for the copy ----------------------------------------------
     try:
         import shutil as _shutil
