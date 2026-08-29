@@ -584,3 +584,14 @@ one failing chunk must not discard the others.
 
 **R-A19** Every cancellation class must be caught by the job runner. A
 deliberate Stop reported as a crash hides whether anything actually failed.
+
+**R-F18** Suspected duplicates are copied into the SAME event folder as the
+frame they duplicate, with `_duplicate` appended to the name, so the two sort
+together and can be compared. A separate review tree separates a duplicate
+from its original and makes reviewing them harder, which is the one task the
+user must perform. `duplicates_beside_original = false` restores the old tree.
+
+**R-F19** By default only ONE photo per duplicate group is analysed. Paying to
+analyse every frame of a burst is what detecting them was meant to avoid.
+`judge_duplicates = true` opts in to analysing all of them so the keeper is
+chosen on photographic merit rather than file size.

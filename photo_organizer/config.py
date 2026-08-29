@@ -201,7 +201,18 @@ class AnalysisConfig:
     # whether people are looking at the camera. Measured on this library:
     # 528 groups, 627 extra photos, $0.13 at batch rates. Turning this off
     # falls back to "biggest file wins", which is not the same question.
-    judge_duplicates: bool = True
+    # Analyse EVERY member of a duplicate group so the keeper is chosen on
+    # sharpness, composition and gaze rather than on file size. Off by
+    # default: with duplicates now filed beside the original, they can be
+    # compared by eye, and one analysis per group is what most people want
+    # to pay for. Turn it on to have the choice made for you (measured:
+    # 627 extra photos, $0.13 for this library).
+    judge_duplicates: bool = False
+
+    # Duplicates are copied into the SAME event folder as the frame they
+    # duplicate, with "_duplicate" appended, so the two sort together and can
+    # be compared. False restores the separate _duplicates_review/ tree.
+    duplicates_beside_original: bool = True
     peak_contradiction_km: float = 30.0
     # A summit must reach this probability to name a folder or to have its
     # coordinates written into the files. Below it the event is named by

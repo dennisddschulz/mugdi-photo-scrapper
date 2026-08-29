@@ -17,9 +17,10 @@ See `SPECIFICATION.md` for the full spec and `CLAUDE.md` for the safety rules.
 - Every copy is verified against the original by full content hash before it
   counts as done. A copy that fails verification is removed, not kept.
 - Existing files are never overwritten; a name collision gets a suffix.
-- Suspected duplicates are **copied** to `_duplicates_review/`, and frames
-  judged empty to `_rejected_review/`. Nothing is ever deleted — not
-  duplicates, not empty frames, not originals, not anything.
+- Suspected duplicates are **copied into the same event folder** as the frame
+  they duplicate, with `_duplicate` appended, so the two sort together and can
+  be compared. Frames judged empty go to `_rejected_review/`. Nothing is ever
+  deleted — not duplicates, not empty frames, not originals, not anything.
 - Copying requires explicit confirmation and never happens by default.
 - Recovery from any failure is always "delete the output folder and re-run".
 
@@ -78,11 +79,33 @@ re-request.
 **Duplicates are detected before analysis**, so a burst of 30 near-identical
 frames costs one analysis rather than 30.
 
+### Duplicates stay next to the photo they duplicate
+
+```
+2020/Unknown_07_03/IMG_20200307_122630_duplicate.jpg
+2020/Unknown_07_03/IMG_20200307_122631_duplicate.jpg
+2020/Unknown_07_03/IMG_20200307_122632_duplicate.jpg
+2020/Unknown_07_03/IMG_20200307_122633.jpg          <- the one that was kept
+2020/Unknown_07_03/IMG_20200307_130000.jpg
+```
+
+They sort together, so choosing between them is a matter of looking at the
+folder and deleting the ones you do not want. A separate `_duplicates_review/`
+tree put them in a different part of the library from the frame they
+duplicate, which made the one job you actually have to do harder than it
+needed to be. Set `duplicates_beside_original = false` to restore it.
+
+**Only one photo per duplicate group is analysed** — that is the whole point
+of finding them, and a burst of thirty costs one analysis rather than thirty.
+
 ### Which duplicate gets kept
 
-Not the biggest file — **the best photograph**. Every frame in a group is
-analysed (627 extra photos across this library, **$0.13**) and the keeper is
-chosen on, in order:
+By default the largest file, and then you decide by eye — they are right
+there in the folder.
+
+Set `judge_duplicates = true` and every frame in a group is analysed instead
+(627 extra photos across this library, **$0.13**), with the keeper chosen on,
+in order:
 
 1. **sharpness** — a blurred keeper is not a keeper
 2. **gaze** — are the people looking at the camera

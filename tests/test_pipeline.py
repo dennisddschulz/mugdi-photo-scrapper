@@ -1569,21 +1569,92 @@ class TestCopying(unittest.TestCase):
         self.assertEqual(again.copied, 0)
         self.assertEqual(again.skipped_existing, 1)
 
-    def test_duplicates_go_to_the_review_folder_and_are_not_deleted(self):
+    def test_duplicates_land_beside_the_frame_they_duplicate(self):
+        """Reviewing a duplicate means comparing it with the keeper.
+
+        They used to go to a separate _duplicates_review/ tree, which put
+        them in a different part of the library from the frame they
+        duplicate -- so the one job the user has to do was made hard.
+        """
+        from photo_organizer.copier import DUPLICATE_SUFFIX, copy_plan
+
+        keeper = self._photo("keep.jpg")
+        dupe = self._photo("dupe.jpg")
+        dupe.duplicate_role = "near"
+        dupe.duplicate_of = str(keeper.source_path)
+        plan = self._plan([keeper, dupe])
+        stats = copy_plan(plan, Config(), write_metadata=False)
+
+        self.assertEqual(stats.copied, 1)
+        self.assertEqual(stats.duplicates_copied, 1)
+
+        folder = self.output / plan.events[0].rel_dir
+        names = sorted(f.name for f in folder.glob("*.jpg"))
+        self.assertIn("keep.jpg", names)
+        self.assertIn("dupe" + DUPLICATE_SUFFIX + ".jpg", names)
+        # Nothing was deleted, and the source is untouched.
+        self.assertTrue(dupe.source_path.exists())
+        self.assertTrue(keeper.source_path.exists())
+
+    def test_duplicates_sort_next_to_their_original(self):
+        """The point of the suffix: they appear together in a file listing."""
+        from photo_organizer.copier import DUPLICATE_SUFFIX, copy_plan
+
+        keeper = self._photo("IMG_1234.jpg")
+        dupe = self._photo("IMG_1234_1.jpg")
+        dupe.duplicate_role = "near"
+        dupe.duplicate_of = str(keeper.source_path)
+        plan = self._plan([keeper, dupe])
+        copy_plan(plan, Config(), write_metadata=False)
+
+        folder = self.output / plan.events[0].rel_dir
+        names = sorted(f.name for f in folder.glob("*.jpg"))
+        self.assertEqual(names[0], "IMG_1234.jpg")
+        self.assertTrue(names[1].startswith("IMG_1234_1" + DUPLICATE_SUFFIX))
+
+    def test_several_duplicates_of_one_photo_all_survive(self):
+        """A burst of five must not lose four to name collisions."""
+        from photo_organizer.copier import copy_plan
+
+        keeper = self._photo("burst.jpg")
+        dupes = []
+        for i in range(4):
+            d = self._photo("burst_%d.jpg" % i)
+            d.duplicate_role = "near"
+            d.duplicate_of = str(keeper.source_path)
+            dupes.append(d)
+        plan = self._plan([keeper] + dupes)
+        stats = copy_plan(plan, Config(), write_metadata=False)
+
+        self.assertEqual(stats.duplicates_copied, 4)
+        folder = self.output / plan.events[0].rel_dir
+        self.assertEqual(len(list(folder.glob("*.jpg"))), 5)
+
+    def test_the_separate_review_folder_is_still_available(self):
         from photo_organizer.copier import DUPLICATES_DIR, copy_plan
 
         keeper = self._photo("keep.jpg")
         dupe = self._photo("dupe.jpg")
         dupe.duplicate_role = "near"
         dupe.duplicate_of = str(keeper.source_path)
-        stats = copy_plan(self._plan([keeper, dupe]), Config(), write_metadata=False)
+        config = Config()
+        config.analysis.duplicates_beside_original = False
+        copy_plan(self._plan([keeper, dupe]), config, write_metadata=False)
 
-        self.assertEqual(stats.copied, 1)
-        self.assertEqual(stats.duplicates_copied, 1)
         review = list((self.output / DUPLICATES_DIR).rglob("*.jpg"))
         self.assertEqual(len(review), 1)
-        # And the original is still in the source, untouched.
-        self.assertTrue(dupe.source_path.exists())
+
+    def test_only_one_photo_per_duplicate_group_is_analysed_by_default(self):
+        """Paying to analyse every frame of a burst is what finding them
+        was meant to avoid."""
+        from photo_organizer.analyze import select_photos
+
+        photos = [make_photo("%d.jpg" % i) for i in range(5)]
+        for photo in photos[1:]:
+            photo.duplicate_role = "near"
+        event = Event(index=1, photos=photos)
+        self.assertFalse(Config().analysis.judge_duplicates)
+        self.assertEqual(len(select_photos(event, 0)), 1)
 
     def test_output_inside_source_is_refused_at_copy_time(self):
         from photo_organizer.copier import copy_plan

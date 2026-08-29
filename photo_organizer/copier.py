@@ -27,6 +27,10 @@ from .models import Photo, Plan
 log = logging.getLogger(__name__)
 
 DUPLICATES_DIR = "_duplicates_review"
+# Appended to a duplicate's filename so it sorts beside the frame it
+# duplicates. Reviewing them means comparing them, and comparing them means
+# having them in the same folder.
+DUPLICATE_SUFFIX = "_duplicate"
 # Frames judged empty -- all black, all white, or an accidental
 # pocket shot. Set aside for a look, exactly like duplicates, and
 # deleted never.
@@ -191,7 +195,11 @@ def copy_plan(
                 continue
             role = getattr(photo, "duplicate_role", None)
             if role in ("exact", "near"):
-                _copy_duplicate(photo, output_root, stats, deep_verify)
+                _copy_duplicate(
+                    photo, output_root, stats, deep_verify,
+                    destination=destination,
+                    beside_original=config.analysis.duplicates_beside_original,
+                )
                 continue
 
             target = destination / (photo.dest_name or photo.source_path.name)
@@ -292,19 +300,38 @@ def _copy_rejected(
 
 
 def _copy_duplicate(
-    photo: Photo, output_root: Path, stats: CopyStats, deep: bool
+    photo: Photo,
+    output_root: Path,
+    stats: CopyStats,
+    deep: bool,
+    destination: Optional[Path] = None,
+    beside_original: bool = True,
 ) -> None:
-    """Put a suspected duplicate where the user can judge it.
+    """Put a suspected duplicate where it can actually be judged.
 
-    Grouped by the photo it duplicates, so what-is-a-copy-of-what is
-    visible. Nothing is deleted, here or anywhere else.
+    By default that is the SAME folder as the frame it duplicates, with
+    `_duplicate` appended to the name, so the two sort together and can be
+    compared without hunting through a second tree.
+
+    Set `duplicates_beside_original = false` to keep the older behaviour of
+    a separate `_duplicates_review/` folder grouped by original.
+
+    Nothing is deleted, here or anywhere else.
     """
-    group = "ungrouped"
-    if getattr(photo, "duplicate_of", None):
-        group = Path(photo.duplicate_of).stem[:60] or "ungrouped"
-    folder = output_root / DUPLICATES_DIR / f"{photo.duplicate_role}_{group}"
+    if beside_original and destination is not None:
+        folder = destination
+        source_name = photo.dest_name or photo.source_path.name
+        stem = Path(source_name).stem
+        name = f"{stem}{DUPLICATE_SUFFIX}{Path(source_name).suffix}"
+    else:
+        group = "ungrouped"
+        if getattr(photo, "duplicate_of", None):
+            group = Path(photo.duplicate_of).stem[:60] or "ungrouped"
+        folder = output_root / DUPLICATES_DIR / f"{photo.duplicate_role}_{group}"
+        name = photo.source_path.name
+
     folder.mkdir(parents=True, exist_ok=True)
-    target = unique_target(folder, photo.source_path.name)
+    target = unique_target(folder, name)
     try:
         shutil.copy2(photo.source_path, target)
     except OSError as exc:
@@ -319,3 +346,5 @@ def _copy_duplicate(
             target.unlink()
         except OSError:
             pass
+
+
