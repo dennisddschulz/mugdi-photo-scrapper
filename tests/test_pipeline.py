@@ -2314,5 +2314,47 @@ class TestCrossSiteProtection(unittest.TestCase):
         self.assertTrue(self._Handler({}, "t" * 24)._same_origin())
 
 
+class TestUiJavaScript(unittest.TestCase):
+    """app.html is one script block: one syntax error kills the whole UI.
+
+    An unterminated string in the copy-confirmation text stopped every line
+    of JavaScript from running. The page still rendered, so it presented as
+    "my settings are gone" rather than as a parse error.
+    """
+
+    def _script(self) -> str:
+        import re as _re
+
+        html = Path("photo_organizer/static/app.html").read_text(encoding="utf-8")
+        blocks = _re.findall(r"<script[^>]*>([\s\S]*?)</script>", html)
+        self.assertTrue(blocks, "no script block found in app.html")
+        return chr(10).join(blocks).replace("__TOKEN__", "x" * 32)
+
+    def test_the_script_parses(self):
+        """Checked with node when it is installed, skipped when it is not.
+
+        node is the only sound check here -- a hand-rolled quote counter
+        false-positives on every regex literal containing a quote, which
+        this file has several of.
+        """
+        import shutil as _shutil
+        import subprocess
+        import os as _os
+
+        node = _shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as handle:
+            handle.write(self._script())
+            path = handle.name
+        self.addCleanup(_os.unlink, path)
+        result = subprocess.run([node, "--check", path], capture_output=True,
+                                text=True)
+        self.assertEqual(
+            result.returncode, 0,
+            "app.html JavaScript does not parse: " + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

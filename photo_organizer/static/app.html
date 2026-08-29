@@ -5,23 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Photo Organizer</title>
 <style>
+/* Black, red and white. Committed to one theme rather than following the
+   system, so the palette below is the whole story -- there is no light
+   variant to keep in step. */
 :root {
-  --bg: #f6f7f9; --panel: #fff; --panel-2: #fbfbfd; --ink: #14161a; --ink-2: #5b6472;
-  --ink-3: #8b95a4; --line: #e3e6ec; --line-2: #d2d7e0; --accent: #3d5afe; --accent-ink: #fff;
-  --warn-bg: #fff4e0; --warn-ink: #8a5a00; --warn-line: #f0d9a8; --danger: #c0392b;
-  --ok-bg: #e6f7ed; --ok-ink: #1a7943; --run: #0b7dd6;
-  --shadow: 0 1px 2px rgba(16,20,28,.06), 0 4px 16px rgba(16,20,28,.05);
+  --bg: #08080a; --panel: #121216; --panel-2: #191920; --ink: #ffffff; --ink-2: #b4b4bd;
+  --ink-3: #7a7a86; --line: #25252d; --line-2: #36363f; --accent: #e11d2e; --accent-ink: #ffffff;
+  --warn-bg: #2a1a10; --warn-ink: #f0b070; --warn-line: #4a2f18;
+
+  /* Deliberately NOT the same red as --accent. The accent is on ordinary
+     buttons; this marks the actions that write to disk. If both were the
+     same red, the one visual cue separating "run a preview" from "copy
+     14,000 files" would be gone. */
+  --danger: #ff4d3d;
+
+  /* Success stays green for the same reason: in a tool that copies files,
+     "it worked" and "careful" must not look alike. */
+  --ok-bg: #10241a; --ok-ink: #5fd08a; --run: #ff6b5b;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.6), 0 6px 22px rgba(0,0,0,.45);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115; --panel: #171a20; --panel-2: #1c2027; --ink: #e8eaee; --ink-2: #a2abba;
-    --ink-3: #6f7889; --line: #262b34; --line-2: #333945; --accent: #7c8cff; --accent-ink: #0f1115;
-    --warn-bg: #2e2410; --warn-ink: #e5b769; --warn-line: #4a3a17; --danger: #ff6b5b;
-    --ok-bg: #11291d; --ok-ink: #6ddb9c; --run: #5cb3ff;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
-  }
-}
+::selection { background: var(--accent); color: var(--accent-ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
@@ -427,12 +433,10 @@ $("copyBtn").onclick = async () => {
   if (!confirm(`Copy ${n} photo(s) into:
 ${where}
 
-`
-      + "Tags will be written into the COPIES. Your source folder is not modified.
-"
-      + "Duplicates are set aside for review; nothing is deleted.
+Tags will be written into the COPIES. Your source folder is not modified.
+Duplicates are set aside for review; nothing is deleted.
 
-Proceed?")) return;
+Proceed?`)) return;
   try {
     await jpost("/api/run", { step: "copy", confirm: "COPY" });
     $("logBox").style.display = "block"; startPolling();
