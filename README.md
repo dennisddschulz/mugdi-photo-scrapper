@@ -344,14 +344,38 @@ coords: 44.9632445, 6.2428893      (Écrins, not Mont Blanc)
 It runs after the paid analysis, only on events still unnamed, at about one
 photo per second.
 
-**There is no page detector, and there does not need to be one.** Four
-attempts to find pages from pixels failed: brightness and edges scored a
-portrait of a person 3.17 and a real page 0.0; adding saturation still scored
-the page 0.0; and at higher resolution the "pages" turned out to be climbers
-on grey granite. Grey rock and printed paper are statistically identical, and
-a climbing library is full of grey rock. OCR needs no detector because it
-*is* one — over rock it returns `SESS JURE SaaS Paes iets Seen`, which matches
-nothing in a gazetteer of real places.
+### Finding the pages first
+
+Reading everything was a mistake: five hours of OCR that named six events
+"Sé Pé". Only the photos that are pictures of writing are worth reading, and
+finding them is what four pixel heuristics could not do — brightness and edges
+scored a portrait of a person 3.17 and a real page 0.0; adding saturation
+still scored the page 0.0; at higher resolution the "pages" were climbers on
+grey granite. Grey rock and printed paper are statistically identical, and a
+climbing library is full of grey rock.
+
+**CLIP does it perfectly, first try**, because it is the right kind of
+question. CLIP failed earlier in this project at *naming a summit* — an
+identity question, where it answered "K2" at 82% for a forest slope. "Is this
+a printed page?" is a *category* question, which is what it is for.
+
+Measured on 400 random photos plus known pages:
+
+```
+three known guidebook pages   1.000, 1.000, 1.000
+seven random photographs      0.000 – 0.016
+3% of the library scores >= 0.9
+```
+
+The ten highest-scoring were, on inspection, ten printed pages: eight climbing
+topos and two invoices. No false positives.
+
+That 3% is the point — OCR now runs on about **400 photos instead of 13,825**.
+The Aiguille Dibona event went from reading 41 photos to reading **one**, in
+35 seconds. Scores are cached by content hash like everything else.
+
+If `torch` is not installed the pipeline still works; it just reads every
+photo, slowly, and says so.
 
 **Reading a page is not one attempt.** The Dibona trip had two topos
 photographed 31 seconds apart. One read cleanly; the other did not, and the

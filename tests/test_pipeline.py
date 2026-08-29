@@ -3789,5 +3789,60 @@ class TestOcrCaching(unittest.TestCase):
         ranked = scan_for_text(photos, store=store)
         self.assertTrue(all(words > 0 for words, _p in ranked), ranked)
 
+class TestPageDetection(unittest.TestCase):
+    """The detector four pixel heuristics could not build."""
+
+    def test_it_asks_a_category_question_not_an_identity_one(self):
+        """CLIP failed in this project at naming summits -- identity, where
+        it answered K2 at 82% for a forest slope. "Is this a printed page?"
+        is a category question, which is what it is for."""
+        from photo_organizer.pages import PAGE_PROMPTS, PROMPTS
+
+        self.assertGreater(len(PROMPTS), PAGE_PROMPTS,
+                           "a softmax needs alternatives to be confident against")
+        self.assertTrue(all("page" in p or "book" in p
+                            for p in PROMPTS[:PAGE_PROMPTS]))
+
+    def test_the_threshold_sits_in_the_measured_gap(self):
+        """Pages scored 1.000 and photographs 0.000-0.016."""
+        from photo_organizer.pages import PAGE_THRESHOLD
+
+        self.assertGreater(PAGE_THRESHOLD, 0.1)
+        self.assertLess(PAGE_THRESHOLD, 0.95)
+
+    def test_scores_are_cached(self):
+        """Four photos a second; doing it twice for the same bytes is the
+        same mistake as paying twice for the same analysis."""
+        from photo_organizer.db import AnalysisStore
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        store = AnalysisStore(root / "a.sqlite3")
+        store.put_page_score("h1", 0.97)
+        self.assertAlmostEqual(store.get_page_score("h1"), 0.97)
+        self.assertIsNone(store.get_page_score("never-scored"))
+
+    def test_a_cached_score_avoids_running_the_model(self):
+        from photo_organizer.db import AnalysisStore
+        from photo_organizer.pages import find_pages
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        store = AnalysisStore(root / "a.sqlite3")
+        photos = [make_photo("page.jpg"), make_photo("rock.jpg")]
+        photos[0].content_key = "k0"; photos[1].content_key = "k1"
+        store.put_page_score("k0", 0.99)
+        store.put_page_score("k1", 0.01)
+        # The files do not exist, so anything that ran the model would fail.
+        found = find_pages(photos, store=store)
+        self.assertEqual([f.path.name for f in found], ["page.jpg"])
+
+    def test_the_pipeline_can_run_without_it(self):
+        """torch may not be installed. Then every photo is read, slowly,
+        rather than nothing working at all."""
+        from photo_organizer.pages import unavailable_reason
+
+        self.assertIn("hours", unavailable_reason())
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

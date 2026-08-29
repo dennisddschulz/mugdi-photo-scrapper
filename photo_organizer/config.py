@@ -250,6 +250,12 @@ class AnalysisConfig:
     # "Aiguille Dibona" on a page in an event the model had placed in the
     # Mont Blanc massif, 120 km away.
     read_text_locally: bool = True
+    # Find the photos that are pictures of printed pages, and read only
+    # those. Measured: 3% of this library, so OCR runs on about 400 photos
+    # instead of 13,825 -- minutes instead of hours. Uses CLIP locally; four
+    # attempts to do it with pixel statistics all failed, because grey rock
+    # and printed paper look identical to a histogram.
+    detect_pages: bool = True
     # How many photos of one event to read before giving up on it. It stops
     # early as soon as a photo names a real place.
     ocr_max_photos_per_event: int = 60

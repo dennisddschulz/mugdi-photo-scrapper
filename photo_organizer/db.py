@@ -107,6 +107,14 @@ CREATE TABLE IF NOT EXISTS ocr_text (
     text         TEXT NOT NULL
 );
 
+-- How much each photo looks like a picture of a printed page. About four
+-- photos a second to work out, so it is remembered rather than recomputed.
+CREATE TABLE IF NOT EXISTS page_score (
+    content_hash TEXT PRIMARY KEY,
+    scored_at    TEXT NOT NULL,
+    score        REAL NOT NULL
+);
+
 -- Batch jobs, so a submitted job survives the app being closed. A batch can
 -- take up to 24 hours; losing the job name would mean paying twice.
 CREATE TABLE IF NOT EXISTS batch_job (
@@ -549,6 +557,27 @@ class AnalysisStore:
                 " VALUES (?,?,?) ON CONFLICT(content_hash) DO UPDATE SET"
                 "  read_at=excluded.read_at, text=excluded.text",
                 (content_hash, datetime.now().isoformat(timespec="seconds"), text),
+            )
+
+    def get_page_score(self, content_hash: str) -> Optional[float]:
+        if not content_hash:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT score FROM page_score WHERE content_hash=?", (content_hash,)
+            ).fetchone()
+        return float(row["score"]) if row else None
+
+    def put_page_score(self, content_hash: str, score: float) -> None:
+        if not content_hash:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO page_score (content_hash, scored_at, score)"
+                " VALUES (?,?,?) ON CONFLICT(content_hash) DO UPDATE SET"
+                "  scored_at=excluded.scored_at, score=excluded.score",
+                (content_hash, datetime.now().isoformat(timespec="seconds"),
+                 float(score)),
             )
 
     def text_count(self) -> int:

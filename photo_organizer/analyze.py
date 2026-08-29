@@ -1391,6 +1391,8 @@ def read_events_locally(
     """
     from .db import AnalysisStore
     from .ocr import available, best_name, read_event, unavailable_reason
+    from .pages import available as page_detection_available
+    from .pages import find_pages
     from .peaks import PeakIndex
 
     settings = config.analysis
@@ -1421,10 +1423,17 @@ def read_events_locally(
         say("Every event already has a place name; no text to read.")
         return {"read": 0, "named": 0, "skipped": False}
 
-    say(
-        f"Reading text in photos of {len(targets)} unnamed event(s). "
-        "This is local and free, about one photo a second."
-    )
+    if settings.detect_pages and page_detection_available():
+        say(
+            f"Looking for photos of guidebook pages in {len(targets)} unnamed "
+            "event(s), then reading those. Local and free."
+        )
+    else:
+        say(
+            f"Reading text in photos of {len(targets)} unnamed event(s). "
+            "No page detection available, so every photo is read -- this is "
+            "slow. " + ("" if settings.detect_pages else "Enabled by detect_pages.")
+        )
 
     read_count = 0
     named = 0
@@ -1435,8 +1444,20 @@ def read_events_locally(
         if on_progress:
             on_progress(position, len(targets), f"event {event.index}")
 
+        # Find the pictures of writing first, and read only those. Reading
+        # everything took five hours and named six events "Se Pe"; about 3%
+        # of this library is a printed page, so this is the difference
+        # between hours and minutes.
+        photos = list(event.photos)
+        if settings.detect_pages and page_detection_available():
+            found = find_pages(photos, store=store, should_cancel=should_cancel)
+            by_path = {str(p.source_path): p for p in photos}
+            photos = [by_path[str(f.path)] for f in found if str(f.path) in by_path]
+            if not photos:
+                continue
+
         results = read_event(
-            list(event.photos),
+            photos,
             peak_index,
             countries=settings.peak_countries,
             max_photos=settings.ocr_max_photos_per_event,

@@ -638,9 +638,13 @@ text in their photos read locally with Tesseract, and names found are verified
 against the gazetteer. Free, about one photo per second, and it is what turned
 an event misnamed "Mont Blanc Massif" into Aiguille Dibona, 120 km away.
 
-**R-F21** There must be NO pixel-based page detector. Four attempts failed on
-real data; grey rock and printed paper are statistically identical. OCR is its
-own detector: gibberish read off rock matches nothing in a gazetteer.
+**R-F21** There must be no PIXEL-BASED page detector -- four attempts failed
+on real data, because grey rock and printed paper are statistically identical.
+Pages are found with CLIP instead: measured, three known pages scored 1.000
+and seven photographs 0.000-0.016, and the ten highest-scoring in a 400-photo
+sample were ten actual printed pages. OCR then reads only those, about 3% of
+the library, turning five hours into minutes. Without torch the pipeline still
+runs and reads everything, slowly.
 
 **R-F22** OCR does not stop at the first name found, and names must be
 specific: at least two words, or a single word of 11+ characters. An event was
