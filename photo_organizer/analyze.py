@@ -821,61 +821,79 @@ def analyze_plan(
             "These images are uploaded to Google."
         )
         try:
-            job_name, keys = client.submit(
-                [(d, p.source_path) for d, p in pending], progress=say
+            jobs = client.submit(
+                [(d, p.source_path) for d, p in pending],
+                progress=say,
+                should_cancel=should_cancel,
             )
         except Exception as exc:
             say(f"Batch submission failed: {exc}")
             return stats
 
         # Recorded before anything else can go wrong, so a crash or a closed
-        # app does not orphan a job that is already being billed.
-        store.remember_job(job_name, settings.model, keys)
-        stats.job_name = job_name
-        stats.submitted = len(pending)
+        # app cannot orphan work that is already being billed. Every job,
+        # not just the first: a library needs several.
+        for job_name, keys in jobs:
+            store.remember_job(job_name, settings.model, keys)
+        stats.job_name = ", ".join(name for name, _ in jobs)
+        stats.submitted = sum(len(keys) for _, keys in jobs)
 
         if not wait_for_batch:
             stats.state = "SUBMITTED"
             say(
-                f"Batch {job_name} submitted and recorded. Results can be "
-                "collected later; nothing is lost by closing the app."
+                f"{len(jobs)} batch job(s) submitted and recorded. Results can "
+                "be collected later; nothing is lost by closing the app."
             )
             return stats
 
-        state = client.wait(
-            job_name,
-            poll_seconds=settings.poll_seconds,
-            max_wait_seconds=settings.max_wait_seconds,
-            progress=say,
-            should_cancel=should_cancel,
-        )
-        stats.state = state
-        store.update_job(job_name, state, finished=state in SUCCESS_STATES)
-        if state not in SUCCESS_STATES:
-            say(f"Batch ended in state {state}; keeping the job for later collection.")
-            return stats
-
-        result = client.collect(job_name)
-        stats.returned = len(result.analyses)
-        stats.failed = len(result.errors)
-        for key, analysis in result.analyses.items():
-            photo = by_hash.get(key)
-            if photo is None:
+        # --- wait for each job, then collect it --------------------------
+        states: list[str] = []
+        for position, (job_name, _keys) in enumerate(jobs, start=1):
+            check_cancel()
+            say(f"Waiting for batch {position} of {len(jobs)}...")
+            state = client.wait(
+                job_name,
+                poll_seconds=settings.poll_seconds,
+                max_wait_seconds=settings.max_wait_seconds,
+                progress=say,
+                should_cancel=should_cancel,
+            )
+            states.append(state)
+            store.update_job(job_name, state, finished=state in SUCCESS_STATES)
+            if state not in SUCCESS_STATES:
+                # One failed chunk must not discard the others. It stays in
+                # the database and can be collected later.
+                say(
+                    f"Batch {position} ended in state {state}; keeping it for "
+                    "later collection and continuing with the rest."
+                )
                 continue
-            analysis = _verify_against_gazetteer(
-                analysis, peak_index, settings.peak_countries
+
+            result = client.collect(job_name)
+            stats.returned += len(result.analyses)
+            stats.failed += len(result.errors)
+            for key, analysis in result.analyses.items():
+                photo = by_hash.get(key)
+                if photo is None:
+                    continue
+                analysis = _verify_against_gazetteer(
+                    analysis, peak_index, settings.peak_countries
+                )
+                if analysis.verified_peak:
+                    stats.peaks_verified += 1
+                if analysis.rejected_peak:
+                    stats.peaks_rejected += 1
+                if analysis.is_personal_document:
+                    stats.personal_documents += 1
+                store.put(key, photo.source_path, analysis, photo.size_bytes,
+                          photo.timestamp, raw=result.raw.get(key))
+                known[key] = analysis
+            say(
+                f"  batch {position}: {len(result.analyses)} analysed, "
+                f"{len(result.errors)} failed"
             )
-            if analysis.verified_peak:
-                stats.peaks_verified += 1
-            if analysis.rejected_peak:
-                stats.peaks_rejected += 1
-                say(f"  rejected unverifiable summit {analysis.rejected_peak!r}")
-            if analysis.is_personal_document:
-                stats.personal_documents += 1
-            store.put(key, photo.source_path, analysis, photo.size_bytes,
-                      photo.timestamp, raw=result.raw.get(key))
-            known[key] = analysis
-        store.update_job(job_name, state, finished=True)
+        stats.state = ", ".join(sorted(set(states))) if states else ""
+        say(f"Stored {stats.returned} analysis result(s); {stats.failed} failed.")
         say(f"Stored {stats.returned} analysis result(s); {stats.failed} failed.")
 
     # --- choose the best of each duplicate group -------------------------

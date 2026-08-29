@@ -566,3 +566,21 @@ already changed.
 **R-U11** Folders that could not be identified carry no badge. A marker on
 every folder conveys nothing; region-only and activity-only names are marked
 distinctly so a guess is never presented as a find.
+
+**R-A15** A submission must be split into chunks below the API's 2 GiB upload
+limit. Measured: 13,748 photos produce 3.68 GB, which is rejected with HTTP
+413 after the entire encode. The chunk target is 1.4 GB, giving ~5,500 photos
+per job and 3 jobs for this library.
+
+**R-A16** Requests are streamed to a temp file as they are encoded, never
+accumulated in memory, and the temp file is removed whether or not the upload
+succeeds. Measured: holding them cost 3.7 GB of process memory.
+
+**R-A17** Encoding reports progress at least every 250 photos. It is the
+slowest stage in the pipeline and reported nothing at all for 85 minutes.
+
+**R-A18** Every chunk is recorded in `batch_job` before the next begins, and
+one failing chunk must not discard the others.
+
+**R-A19** Every cancellation class must be caught by the job runner. A
+deliberate Stop reported as a crash hides whether anything actually failed.

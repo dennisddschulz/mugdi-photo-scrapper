@@ -51,6 +51,19 @@ MAX_EDGE = 1024
 INLINE_LIMIT_BYTES = 18 * 1024 * 1024
 INLINE_MAX_REQUESTS = 12
 
+# The API refuses an upload over 2 GiB:
+#   HTTP 413 "Media is too large. Limit: 2147483648"
+# Measured the hard way, after 85 minutes of encoding produced a 3.68 GB
+# file that was rejected outright. Chunks are kept well under it: the
+# accounting is approximate, a rejected chunk costs the whole run, and
+# nothing is gained by cutting it fine.
+UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+CHUNK_TARGET_BYTES = 1400 * 1024 * 1024
+
+# Progress cadence during encoding. It is the slowest stage in the pipeline
+# and it used to report nothing at all until it was finished.
+ENCODE_REPORT_EVERY = 250
+
 # The API returns BATCH_STATE_* on the generativelanguage endpoint, while
 # the documentation and the Vertex flavour use JOB_STATE_*. Measured live:
 # a finished job reports BATCH_STATE_SUCCEEDED. Accept both spellings --
@@ -190,63 +203,128 @@ class GeminiBatch:
         items: Sequence[tuple[str, Path]],
         display_name: str = "photo-organizer",
         progress: Optional[Callable[[str], None]] = None,
-    ) -> tuple[str, dict[str, str]]:
-        """Create a batch job. Returns (job_name, {key: source_path}).
+        should_cancel: Optional[Callable[[], bool]] = None,
+    ) -> list[tuple[str, dict[str, str]]]:
+        """Create one or more batch jobs. Returns [(job_name, {key: path})].
 
-        The key is the photo's content hash, so results map straight back to
-        database rows without depending on ordering or on file paths.
+        A LIST, because a library does not fit in one upload. Photos are
+        encoded one at a time and written straight to a temp file; when the
+        file approaches the size limit it is uploaded, a job is created, and
+        a new chunk begins.
+
+        The key is the photo's content hash, so results map back to database
+        rows without depending on ordering or on file paths.
         """
+        import tempfile
+
         def say(message: str) -> None:
             log.info("%s", message)
             if progress:
                 progress(message)
 
-        prepared: list[tuple[str, dict]] = []
-        keys: dict[str, str] = {}
-        for key, path in items:
-            encoded = self.encode_image(path)
-            if encoded is None:
-                continue
-            prepared.append((key, self.build_request(encoded)))
-            keys[key] = str(path)
-        if not prepared:
+        jobs: list[tuple[str, dict[str, str]]] = []
+        total = len(items)
+        encoded_count = 0
+        skipped = 0
+        started = time.monotonic()
+
+        handle = None
+        path = None
+        chunk_bytes = 0
+        chunk_keys: dict[str, str] = {}
+
+        def open_chunk():
+            nonlocal handle, path, chunk_bytes, chunk_keys
+            fd, name = tempfile.mkstemp(prefix="photo-organizer-batch-", suffix=".jsonl")
+            handle = open(fd, "w", encoding="utf-8", newline="\n")
+            path = Path(name)
+            chunk_bytes = 0
+            chunk_keys = {}
+
+        def close_and_submit_chunk():
+            """Upload the current chunk and create its job."""
+            nonlocal handle
+            if handle is None:
+                return
+            handle.close()
+            handle = None
+            if not chunk_keys:
+                path.unlink(missing_ok=True)
+                return
+            try:
+                say(
+                    f"Uploading batch {len(jobs) + 1} "
+                    f"({len(chunk_keys)} photo(s), {chunk_bytes / 1e6:.0f} MB)"
+                )
+                file_name = self._upload_file(path, say)
+                job_name = self._create_job(file_name, display_name, len(jobs) + 1)
+                jobs.append((job_name, dict(chunk_keys)))
+                say(f"  batch {len(jobs)} submitted: {job_name}")
+            finally:
+                # The temp file is several hundred megabytes. Remove it
+                # whether or not the upload worked.
+                path.unlink(missing_ok=True)
+
+        open_chunk()
+        try:
+            for key, source in items:
+                if should_cancel is not None and should_cancel():
+                    say("Cancelled while preparing; nothing further submitted.")
+                    break
+                encoded = self.encode_image(source)
+                if encoded is None:
+                    skipped += 1
+                    continue
+                line = json.dumps(
+                    {"key": key, "request": self.build_request(encoded)},
+                    ensure_ascii=False,
+                ) + "\n"
+                blob = line.encode("utf-8")
+
+                # Start a new chunk BEFORE crossing the limit, never after.
+                if chunk_bytes and chunk_bytes + len(blob) > CHUNK_TARGET_BYTES:
+                    close_and_submit_chunk()
+                    open_chunk()
+
+                handle.write(line)
+                chunk_bytes += len(blob)
+                chunk_keys[key] = str(source)
+                encoded_count += 1
+
+                if encoded_count % ENCODE_REPORT_EVERY == 0:
+                    elapsed = time.monotonic() - started
+                    rate = encoded_count / elapsed if elapsed else 0
+                    left = (total - encoded_count) / rate if rate else 0
+                    say(
+                        f"  prepared {encoded_count}/{total} photo(s) "
+                        f"({rate:.0f}/s, about {left / 60:.0f} min left; "
+                        f"chunk {len(jobs) + 1} at {chunk_bytes / 1e6:.0f} MB)"
+                    )
+            close_and_submit_chunk()
+        except BaseException:
+            if handle is not None:
+                handle.close()
+            if path is not None:
+                path.unlink(missing_ok=True)
+            raise
+
+        if skipped:
+            say(f"  {skipped} photo(s) could not be encoded and were skipped")
+        if not jobs:
             raise BatchError("Nothing could be encoded for submission.")
+        say(f"Submitted {len(jobs)} batch job(s) covering {encoded_count} photo(s).")
+        return jobs
 
-        payload_size = sum(len(json.dumps(r)) for _k, r in prepared)
-        use_file = (
-            len(prepared) > INLINE_MAX_REQUESTS or payload_size > INLINE_LIMIT_BYTES
-        )
-        say(
-            f"Submitting {len(prepared)} photo(s) to {self.model} "
-            f"({payload_size/1e6:.1f} MB, {'file' if use_file else 'inline'} mode)"
-        )
-
-        if use_file:
-            file_name = self._upload_jsonl(prepared, say)
-            body = {
-                "batch": {
-                    "display_name": display_name,
-                    "input_config": {"file_name": file_name},
-                }
+    def _create_job(self, file_name: str, display_name: str, index: int) -> str:
+        """Create one batch job from an already-uploaded file."""
+        body = {
+            "batch": {
+                "display_name": f"{display_name}-{index}",
+                "input_config": {"file_name": file_name},
             }
-        else:
-            body = {
-                "batch": {
-                    "display_name": display_name,
-                    "input_config": {
-                        "requests": {
-                            "requests": [
-                                {"request": req, "metadata": {"key": key}}
-                                for key, req in prepared
-                            ]
-                        }
-                    },
-                }
-            }
-
-        url = f"{API_BASE}/models/{self.model}:batchGenerateContent"
+        }
         data = self._request(
-            url,
+            f"{API_BASE}/models/{self.model}:batchGenerateContent",
             data=json.dumps(body).encode("utf-8"),
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -254,37 +332,43 @@ class GeminiBatch:
         job_name = data.get("name") or ""
         if not job_name:
             raise BatchError(f"Batch created but no job name returned: {str(data)[:200]}")
-        say(f"Batch submitted: {job_name}")
-        return job_name, keys
+        return job_name
 
-    def _upload_jsonl(self, prepared: Sequence[tuple[str, dict]], say) -> str:
-        """Upload the requests as a JSONL file and return its resource name."""
-        lines = [
-            json.dumps({"key": key, "request": req}, ensure_ascii=False)
-            for key, req in prepared
-        ]
-        blob = ("\n".join(lines)).encode("utf-8")
-        say(f"Uploading request file ({len(blob)/1e6:.1f} MB)...")
+    def _upload_file(self, path: Path, say) -> str:
+        """Upload a JSONL file and return its resource name.
 
-        # Resumable upload: start, then send the bytes.
-        start = urllib.request.Request(
-            f"{UPLOAD_BASE}?key={urllib.parse.quote(self.api_key)}",
-            data=json.dumps({"file": {"display_name": "photo-organizer-batch"}}).encode(),
-            headers={
-                "X-Goog-Upload-Protocol": "resumable",
-                "X-Goog-Upload-Command": "start",
-                "X-Goog-Upload-Header-Content-Length": str(len(blob)),
-                "X-Goog-Upload-Header-Content-Type": "application/jsonl",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        Streams from disk. The previous version built the whole body in
+        memory, which for this library meant 3.7 GB of process memory for
+        something that was only ever going to be sent once.
+        """
+        size = path.stat().st_size
+        if size > UPLOAD_LIMIT_BYTES:
+            # Should be impossible now, but a chunk that slips past the
+            # target must fail here with a comprehensible message rather
+            # than as an HTTP 413 after a long upload.
+            raise BatchError(
+                f"Request file is {size/1e9:.2f} GB, over the "
+                f"{UPLOAD_LIMIT_BYTES/1e9:.2f} GB upload limit."
+            )
         try:
             import truststore
 
             truststore.inject_into_ssl()
         except ImportError:
             pass
+
+        start = urllib.request.Request(
+            f"{UPLOAD_BASE}?key={urllib.parse.quote(self.api_key)}",
+            data=json.dumps({"file": {"display_name": "photo-organizer-batch"}}).encode(),
+            headers={
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(size),
+                "X-Goog-Upload-Header-Content-Type": "application/jsonl",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
         try:
             with urllib.request.urlopen(start, timeout=self.timeout) as response:
                 upload_url = response.headers.get("X-Goog-Upload-URL")
@@ -296,24 +380,27 @@ class GeminiBatch:
         if not upload_url:
             raise BatchError("Upload start returned no upload URL.")
 
-        finish = urllib.request.Request(
-            upload_url,
-            data=blob,
-            headers={
-                "Content-Length": str(len(blob)),
-                "X-Goog-Upload-Offset": "0",
-                "X-Goog-Upload-Command": "upload, finalize",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(finish, timeout=max(self.timeout, 600)) as response:
-                info = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            raise BatchError(
-                f"Upload failed: HTTP {exc.code} "
-                f"{exc.read().decode('utf-8','replace')[:200]}"
-            ) from None
+        with open(path, "rb") as body:
+            finish = urllib.request.Request(
+                upload_url,
+                data=body,                       # streamed, not read into memory
+                headers={
+                    "Content-Length": str(size),
+                    "X-Goog-Upload-Offset": "0",
+                    "X-Goog-Upload-Command": "upload, finalize",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(
+                    finish, timeout=max(self.timeout, 3600)
+                ) as response:
+                    info = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                raise BatchError(
+                    f"Upload failed: HTTP {exc.code} "
+                    f"{exc.read().decode('utf-8','replace')[:200]}"
+                ) from None
         name = (info.get("file") or {}).get("name") or info.get("name")
         if not name:
             raise BatchError(f"Upload returned no file name: {str(info)[:200]}")

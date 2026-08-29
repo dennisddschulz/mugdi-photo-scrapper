@@ -560,6 +560,35 @@ full one drops messages rather than blocking, since the plan is reloaded when
 the run finishes anyway. A test publishes 1,000 messages to a listener that
 never reads and asserts it stays fast.
 
+## What the first real run found
+
+Four defects, none of which a small test could have caught. Recorded because
+they are the shape of what goes wrong at scale.
+
+**The submission was rejected outright.** Every photo went into one JSONL and
+one upload: 13,748 photos came to **3.68 GB** against a **2 GiB** limit, and
+after 85 minutes of encoding the API answered
+`HTTP 413 Media is too large. Limit: 2147483648`. Nothing was analysed and —
+the one mercy — nothing was billed. It had passed a two-image test perfectly.
+
+Submission is now **chunked**: photos are encoded one at a time, written
+straight to a temp file, and a new chunk starts before the limit is reached.
+For this library that is **3 jobs of ~5,500 photos, ~1.47 GB each**. Each is
+recorded in `batch_job` separately, and one failing chunk no longer discards
+the others.
+
+**Eighty-five minutes of silence.** The encode loop reported nothing until it
+finished, so the slowest stage in the pipeline showed one static line while
+every other stage reported every 500 files. It now reports every 250 photos
+with a rate and an estimate.
+
+**The whole payload was held in RAM** — measured at 3.7 GB of process memory
+for something sent once. It streams to disk now, and the upload streams from
+the file rather than a bytes blob.
+
+**Pressing Stop was reported as a crash**, traceback and all, because the
+copier raises its own cancellation class that the job runner did not catch.
+
 ## When something goes wrong
 
 Every run writes a complete log to `~/.photo_organizer/logs/run-<timestamp>.log`,

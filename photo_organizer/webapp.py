@@ -36,6 +36,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import Config
+from .copier import CopyCancelled
 from .exif import BACKENDS, backend_availability
 from .geo import bbox_span_km, medoid
 from .manifest import save_manifest, write_edits_file
@@ -307,8 +308,12 @@ class AppState:
                     job.status = "cancelled"
                 else:
                     job.status = "done"
-            except Cancelled:
-                job.say("Cancelled. Nothing was written.")
+            except (Cancelled, CopyCancelled):
+                # Both mean "you pressed Stop". The copier raises its own
+                # class, which was not caught here, so a deliberate stop was
+                # reported as a crash complete with traceback -- alarming,
+                # and it hid whether anything had actually gone wrong.
+                job.say("Cancelled. Nothing further was written.")
                 job.status = "cancelled"
             except UnsafePathError as exc:
                 job.error = str(exc)

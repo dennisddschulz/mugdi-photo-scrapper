@@ -3072,5 +3072,187 @@ class TestLiveUpdates(unittest.TestCase):
         self.assertIn("Dibona", message["proposed_name"])
         self.assertEqual(message["place_name"], "Dibona")
 
+class TestBatchChunking(unittest.TestCase):
+    """One upload could not hold a library.
+
+    The first real run encoded 13,748 photos into a single 3.68 GB file and
+    was rejected with HTTP 413 "Media is too large. Limit: 2147483648" after
+    85 minutes of work. It had passed a two-image test perfectly.
+    """
+
+    def _small_chunks(self, target=1_000_000):
+        """Shrink the chunk target so a handful of photos exercises splitting.
+
+        The real target is 1.4 GB; building that in a test would mean
+        writing gigabytes to disk to prove arithmetic.
+        """
+        import photo_organizer.batch as batch_module
+
+        original = batch_module.CHUNK_TARGET_BYTES
+        batch_module.CHUNK_TARGET_BYTES = target
+        self.addCleanup(setattr, batch_module, "CHUNK_TARGET_BYTES", original)
+
+    def _client(self, uploads, created):
+        from photo_organizer.batch import GeminiBatch
+
+        client = GeminiBatch("key-not-used")
+        # Encode to a fixed, known size so the arithmetic is exact.
+        client.encode_image = staticmethod(lambda path, max_edge=1024: "A" * 200_000)
+
+        def fake_upload(path, say):
+            uploads.append(path.stat().st_size)
+            return "files/fake-%d" % len(uploads)
+
+        def fake_create(file_name, display_name, index):
+            created.append(file_name)
+            return "batches/job-%d" % index
+
+        client._upload_file = fake_upload
+        client._create_job = fake_create
+        return client
+
+    def _items(self, count):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        items = []
+        for i in range(count):
+            path = root / ("IMG_%04d.jpg" % i)
+            path.write_bytes(b"x")
+            items.append(("hash%04d" % i, path))
+        return items
+
+    def test_a_library_is_split_into_several_uploads(self):
+        import photo_organizer.batch as batch_module
+
+        self._small_chunks()
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        jobs = client.submit(self._items(30))
+        self.assertGreater(len(jobs), 1,
+                           "30 photos at 200 KB must not fit in one chunk here")
+        self.assertEqual(len(uploads), len(jobs))
+        for size in uploads:
+            self.assertLessEqual(size, batch_module.CHUNK_TARGET_BYTES)
+
+    def test_no_chunk_can_exceed_the_api_limit(self):
+        """The specific failure: 3.68 GB against a 2 GiB cap."""
+        from photo_organizer.batch import UPLOAD_LIMIT_BYTES
+
+        self._small_chunks()
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        client.submit(self._items(40))
+        self.assertGreater(len(uploads), 1, "this must actually split")
+        for size in uploads:
+            self.assertLess(size, UPLOAD_LIMIT_BYTES)
+
+    def test_the_target_leaves_headroom_under_the_limit(self):
+        from photo_organizer.batch import CHUNK_TARGET_BYTES, UPLOAD_LIMIT_BYTES
+
+        self.assertLess(CHUNK_TARGET_BYTES, UPLOAD_LIMIT_BYTES,
+                        "the target must sit below the hard limit")
+
+    def test_every_photo_ends_up_in_exactly_one_chunk(self):
+        """Nothing may be dropped or paid for twice by the split."""
+        self._small_chunks()
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        items = self._items(25)
+        jobs = client.submit(items)
+
+        seen = []
+        for _name, keys in jobs:
+            seen.extend(keys)
+        self.assertEqual(sorted(seen), sorted(k for k, _p in items))
+        self.assertEqual(len(seen), len(set(seen)), "a photo was in two chunks")
+
+    def test_each_chunk_gets_its_own_job_name(self):
+        self._small_chunks()
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        jobs = client.submit(self._items(30))
+        names = [name for name, _ in jobs]
+        self.assertGreater(len(names), 1, "this must actually split")
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_progress_is_reported_while_encoding(self):
+        """85 minutes of silence was the second half of the problem."""
+        from photo_organizer.batch import ENCODE_REPORT_EVERY
+
+        said = []
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        client.submit(self._items(ENCODE_REPORT_EVERY * 2 + 5),
+                      progress=said.append)
+        prepared = [m for m in said if "prepared" in m]
+        self.assertGreaterEqual(len(prepared), 2,
+                                "encoding must report as it goes")
+
+    def test_nothing_is_left_behind_on_disk(self):
+        """The temp files are hundreds of megabytes each."""
+        import tempfile as _tempfile
+
+        before = set(Path(_tempfile.gettempdir()).glob("photo-organizer-batch-*"))
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        client.submit(self._items(20))
+        after = set(Path(_tempfile.gettempdir()).glob("photo-organizer-batch-*"))
+        self.assertEqual(before, after, "a temp request file was left behind")
+
+    def test_temp_files_are_removed_even_when_the_upload_fails(self):
+        import tempfile as _tempfile
+
+        from photo_organizer.batch import BatchError, GeminiBatch
+
+        before = set(Path(_tempfile.gettempdir()).glob("photo-organizer-batch-*"))
+        client = GeminiBatch("key-not-used")
+        client.encode_image = staticmethod(lambda path, max_edge=1024: "A" * 200_000)
+
+        def boom(path, say):
+            raise BatchError("upload refused")
+
+        client._upload_file = boom
+        with self.assertRaises(BatchError):
+            client.submit(self._items(5))
+        after = set(Path(_tempfile.gettempdir()).glob("photo-organizer-batch-*"))
+        self.assertEqual(before, after)
+
+    def test_an_oversized_file_fails_before_it_is_uploaded(self):
+        """A comprehensible message, not an HTTP 413 after a long upload."""
+        from photo_organizer.batch import BatchError, GeminiBatch
+
+        client = GeminiBatch("key-not-used")
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        big = root / "big.jsonl"
+        big.write_bytes(b"x")
+
+        import photo_organizer.batch as batch_module
+
+        original = batch_module.UPLOAD_LIMIT_BYTES
+        batch_module.UPLOAD_LIMIT_BYTES = 0
+        try:
+            with self.assertRaises(BatchError) as caught:
+                client._upload_file(big, lambda m: None)
+            self.assertIn("upload limit", str(caught.exception))
+        finally:
+            batch_module.UPLOAD_LIMIT_BYTES = original
+
+    def test_cancelling_stops_preparing(self):
+        uploads, created = [], []
+        client = self._client(uploads, created)
+        seen = {"n": 0}
+
+        def cancel_after_three():
+            seen["n"] += 1
+            return seen["n"] > 3
+
+        try:
+            jobs = client.submit(self._items(50), should_cancel=cancel_after_three)
+        except Exception:
+            return          # nothing encoded is an acceptable outcome
+        total = sum(len(keys) for _n, keys in jobs)
+        self.assertLess(total, 50, "cancelling must stop the encode loop")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
