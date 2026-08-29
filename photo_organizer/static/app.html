@@ -256,6 +256,7 @@ select.num { width: auto; font-family: inherit; }
           <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">
             Analyses photos with Gemini (Batch API, half price) and caches
             results locally, so a photo is never analysed twice.
+            <div id="keyState" style="margin-top:6px"></div>
           </div>
         </div>
         <div class="logbox" id="logBox" style="display:none"></div>
@@ -566,6 +567,19 @@ function renderRun() {
   $("runBtn").textContent = running ? "Running…" : (STATUS.has_plan ? "Re-run pipeline" : "Run pipeline");
   // Both extra stages need a plan to work on, and cannot share the worker.
   $("enrichBtn").disabled = running || !STATUS.has_plan;
+  // Say up front whether analysis can run. Finding out by pressing the
+  // button and having it stop wastes the whole scan that came before it.
+  const ks = $("keyState");
+  if (ks) {
+    if (STATUS.api_key_present) {
+      ks.textContent = "Gemini API key found.";
+      ks.style.color = "var(--ok-ink)";
+    } else {
+      ks.textContent = "No Gemini API key — Identify will do nothing. "
+        + "Set GEMINI_API_KEY and restart the server.";
+      ks.style.color = "var(--danger)";
+    }
+  }
   $("dupesBtn").disabled = running || !STATUS.has_plan;
   $("copyBtn").disabled = running || !STATUS.has_plan;
   const dup = STATUS.duplicates;

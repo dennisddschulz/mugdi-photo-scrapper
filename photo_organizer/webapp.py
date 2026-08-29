@@ -288,6 +288,10 @@ class AppState:
         return {
             "source": str(self.source) if self.source else "",
             "output": str(self.output) if self.output else "",
+            # Whether analysis can run at all. Without this the only way to
+            # find out is to press Identify and have it stop -- after the
+            # scan, the clustering and the duplicate pass have all run.
+            "api_key_present": bool(self.config.analysis.api_key_resolved),
             "suggested_source": self.suggested_source,
             "suggested_output": self.suggested_output,
             "has_plan": self.plan is not None,

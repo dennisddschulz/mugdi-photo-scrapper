@@ -202,6 +202,14 @@ For analysis you need a Gemini API key:
 setx GEMINI_API_KEY "your-key"
 ```
 
+`setx` writes it permanently but does **not** affect terminals that are
+already open — start a new one, and restart the server, or it will not see it.
+
+The control panel says which state it is in next to the Identify button
+(*"Gemini API key found."* or a warning). That check exists because the only
+other way to find out is to press Identify and have it stop — after the scan,
+the clustering and the duplicate pass have all already run.
+
 Analysis uses the **Batch API at half the interactive price** — nothing here
 is interactive, so batch is the default. Every photo is analysed, not a
 sample (`photos_per_event = 0`), because sampling saved cents and lost peaks.
