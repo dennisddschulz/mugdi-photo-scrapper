@@ -758,3 +758,21 @@ a grade.
 A second, weaker guard restricts matches to Europe (latitude 35-81), since
 a country code is not a location -- Kerguelen and Chamonix are both `FR`.
 Svalbard is inside the box on purpose.
+
+### What a folder is called
+
+```
+2019/CH_Uri_Dammazwillinge_alpine-climbing_20_09
+```
+
+Country, region, peak, activity, date. The peak comes from the gazetteer or
+from a guidebook page; the canton and country from an offline lookup on the
+position -- instant, and with no network. Where the analysis knew a massif,
+that is used instead of the canton, because `Ecrins` says more than
+`Rhone-Alpes`.
+
+Area names like Furka, Grimsel or Chamonix are deliberately absent. No
+source has them: the gazetteer has Sustenpass but no Furkapass or Grimsel,
+and reverse geocoding answers Realp, Guttannen, and Courmayeur for the Mont
+Blanc summit -- the Italian side of a French trip. They would have to be
+invented, so they are not.

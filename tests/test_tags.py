@@ -430,3 +430,54 @@ class TestAltitudesAreNotGrades(unittest.TestCase):
         self.assertTrue(followed_by_grade("Route", "Route 7-"))
         self.assertTrue(followed_by_grade("Pfeiler", "SW-Pfeiler VI+"))
         self.assertFalse(followed_by_grade("Route", "Route 6"))
+
+
+class TestTheCantonReachesTheFolderName(unittest.TestCase):
+    """Geocoding runs before naming, when only 1 of 379 events has GPS. The
+    position an event is named from only exists after naming, so the canton
+    has to be filled -- and the name rebuilt -- afterwards."""
+
+    def _event(self, lat=None, lon=None, place=None):
+        from photo_organizer.models import Event, Photo
+
+        photo = Photo(source_path=Path("/src/a.jpg"))
+        photo.timestamp = datetime(2019, 9, 20, 9)
+        event = Event(index=1, photos=[photo])
+        event.enriched_lat, event.enriched_lon = lat, lon
+        event.place_name = place
+        return event
+
+    def test_a_position_yields_a_canton_and_country(self):
+        from photo_organizer.geo import fill_admin_regions
+
+        event = self._event(46.6226, 8.4315, "Dammazwillinge")   # Furka
+        self.assertEqual(fill_admin_regions([event]), 1)
+        self.assertEqual(event.region, "Uri")
+        self.assertEqual(event.country_code, "CH")
+
+    def test_an_event_with_no_position_is_left_alone(self):
+        from photo_organizer.geo import fill_admin_regions
+
+        event = self._event()
+        self.assertEqual(fill_admin_regions([event]), 0)
+        self.assertIsNone(event.region)
+
+    def test_a_massif_is_not_overwritten_by_a_canton(self):
+        """Ecrins says more than Rhone-Alpes."""
+        from photo_organizer.geo import fill_admin_regions
+
+        event = self._event(44.9632, 6.2429, "Aiguille Dibona")
+        event.region = "Ecrins"
+        fill_admin_regions([event])
+        self.assertEqual(event.region, "Ecrins")
+
+    def test_the_name_carries_peak_canton_and_country(self):
+        from photo_organizer.analyze import build_folder_name
+        from photo_organizer.config import Config
+
+        event = self._event(46.6226, 8.4315, "Dammazwillinge")
+        event.region, event.country_code = "Uri", "CH"
+        event.activity = "alpine climbing"
+        build_folder_name(event, Config().naming)
+        for expected in ("Dammazwillinge", "Uri", "CH"):
+            self.assertIn(expected, event.proposed_name)

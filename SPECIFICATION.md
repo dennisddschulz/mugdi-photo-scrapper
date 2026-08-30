@@ -825,3 +825,24 @@ restricted to latitude 35-81 and longitude -25 to 45. The northern limit is
 Norwegian; everything excluded is southern-hemisphere or Pacific. This is
 the weaker of the two rules -- it only stops an absurd POSITION, while
 R-N13 stops the wrong KIND of name.
+
+**R-N15** EVENT FOLDERS CARRY PEAK, CANTON AND COUNTRY. The name builder
+always supported it; the fields were empty because of a sequencing
+accident. Geocoding ran BEFORE naming, when 1 of 379 events had any GPS,
+and the position an event is named from only exists after naming. The
+canton is now filled once positions are known and the names rebuilt.
+
+It is an offline database lookup -- no network, no rate limit, no cost.
+Measured: Dammazwillinge 46.6226,8.4315 -> Uri, CH; Salbitschijen -> Uri,
+CH; Aiguille Dibona 44.9632,6.2429 -> Rhone-Alpes, FR.
+
+A mountain_range is never overwritten by a canton: `Ecrins` says more than
+`Rhone-Alpes`, and the builder already prefers it.
+
+AREA names -- Furka, Grimsel, Susten, Chamonix -- are NOT produced, and are
+not invented. Measured, no source has them: the gazetteer holds Sustenpass
+but no Furkapass, no Grimselpass and no Chamonix; Nominatim answers Realp,
+Guttannen and, for the Mont Blanc summit which straddles the border,
+Courmayeur on the Italian side of a French trip. They appear on guidebook
+pages, but reading an area name from OCR has no gazetteer to check it
+against, which is what produced "Se Pe" and "Le Toit".

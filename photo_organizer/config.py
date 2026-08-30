@@ -313,7 +313,10 @@ class NamingConfig:
     # the first two that exist. Region before place because the user rated
     # region as more useful than the specific route.
     include_region: bool = True
-    include_country: bool = False
+    # The country belongs in the folder name: a library spanning CH, FR, IT,
+    # AT and NO reads much better with it, and it is exact -- it comes from
+    # the gazetteer entry or an offline lookup, never from a guess.
+    include_country: bool = True
     # The activity goes in every folder name, not only the ones with no
     # place. Browsing the library by what was done -- ski touring, ice
     # climbing -- is the point, and a name that drops it for the events

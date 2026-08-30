@@ -647,16 +647,31 @@ def apply_to_event(
         event.place_name = merged.crag_name
         event.evidence.append(f"crag: {merged.crag_name}")
 
+    source = build_folder_name(
+        event, naming,
+        peak_source="peak" if merged.verified_peak else "crag",
+    )
+    return source
+
+
+def build_folder_name(event, naming, peak_source: str = "peak") -> str:
+    """Assemble the folder name from what is known about the event.
+
+    Separated out so it can be run AGAIN once the canton is filled in.
+    Regions arrive after naming -- the position an event is named from is
+    only worked out during naming -- so the first name is built without one.
+    """
     parts: list[str] = []
     if naming.include_country and event.country_code:
         parts.append(slug(event.country_code))
+    # A massif beats a canton: "Ecrins" says more than "Rhone-Alpes".
     region = event.mountain_range or event.region
     if naming.include_region and region:
         parts.append(slug(region))
 
     if event.place_name:
         parts.append(slug(event.place_name))
-        source = "peak" if merged.verified_peak else "crag"
+        source = peak_source
     elif parts:
         source = "region"
     elif event.activity:
@@ -1459,6 +1474,27 @@ def analyze_plan(
                 if merged is not None:
                     apply_to_event(event, merged, config,
                                    consensus_location(found))
+
+    # --- the canton, now that positions are known -------------------------
+    # Geocoding runs before naming, when only 1 of 379 events has any GPS.
+    # By this point fifty-odd events have a position worked out from peaks
+    # and photo consensus, so the canton is finally available -- offline,
+    # instant and free. The names are then rebuilt to include it.
+    from .geo import fill_admin_regions
+
+    filled = fill_admin_regions(plan.events)
+    if filled:
+        rebuilt = 0
+        for event in plan.events:
+            if not (event.place_name or event.region or event.country_code):
+                continue
+            before = event.proposed_name
+            build_folder_name(event, config.naming,
+                              peak_source=event.name_source or "peak")
+            if event.proposed_name != before:
+                rebuilt += 1
+        say(f"  Added the canton and country to {filled} event(s) from their "
+            f"position; {rebuilt} folder name(s) changed. Offline and free.")
 
     say(
         f"Named: peak={stats.named_from_peak} crag={stats.named_from_crag} "

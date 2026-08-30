@@ -408,3 +408,71 @@ class Geocoder:
         self._cache[key] = found
         self._cache_dirty = True
         return found
+
+
+# Administrative region from coordinates, offline and instant.
+#
+# This exists because of a sequencing accident: geocoding runs BEFORE naming,
+# when only 1 of 379 events has any GPS at all, so nothing gets a region. By
+# the time peaks are matched, fifty-odd events have coordinates and nothing
+# looks again. Measured on real peaks, the offline database answers exactly
+# what is wanted, with no network and no rate limit:
+#
+#     Dammazwillinge  46.6226, 8.4315  ->  Uri, CH
+#     Salbitschijen   46.6806, 8.5298  ->  Uri, CH
+#     Aiguille Dibona 44.9632, 6.2429  ->  Rhone-Alpes, FR
+#
+# It gives the CANTON, not the area. Furka, Grimsel and Chamonix are not
+# available from any source here and are not invented: measured, the
+# gazetteer has no Furkapass or Grimselpass, and Nominatim answers Realp,
+# Guttannen and -- for the Mont Blanc summit, which straddles the border --
+# Courmayeur, on the Italian side of a French trip.
+def fill_admin_regions(events) -> int:
+    """Set `region` and `country_code` on every event that has coordinates.
+
+    Uses the enriched position -- the one worked out from peaks and photo
+    consensus -- not EXIF GPS, which this library barely has.
+
+    Never overwrites a mountain_range: a massif is a better folder name than
+    a canton, and the name builder already prefers it.
+    """
+    try:
+        import reverse_geocoder
+    except ImportError:
+        log.debug("reverse_geocoder is not installed; regions left blank")
+        return 0
+
+    pending = []
+    for event in events:
+        lat = getattr(event, "enriched_lat", None)
+        lon = getattr(event, "enriched_lon", None)
+        if lat is None or lon is None:
+            continue
+        if event.region and event.country_code:
+            continue
+        pending.append((event, (float(lat), float(lon))))
+    if not pending:
+        return 0
+
+    try:
+        # mode=1 is the single-threaded lookup. The default spawns a process
+        # pool, which is a poor trade for a few hundred points and misbehaves
+        # when the caller is already inside a worker thread.
+        hits = reverse_geocoder.search([point for _e, point in pending], mode=1)
+    except Exception as exc:
+        # Never fatal: a missing canton is a worse folder name, not a
+        # broken run.
+        log.warning("Offline reverse geocoding failed: %s", exc)
+        return 0
+
+    filled = 0
+    for (event, _point), hit in zip(pending, hits):
+        admin = (hit.get("admin1") or "").strip()
+        country = (hit.get("cc") or "").strip()
+        if admin and not event.region:
+            event.region = admin
+        if country and not event.country_code:
+            event.country_code = country
+        if admin or country:
+            filled += 1
+    return filled
