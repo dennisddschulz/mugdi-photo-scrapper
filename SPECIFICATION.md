@@ -868,3 +868,24 @@ both a photo-consensus position and a name read from a page (28 and 26
 respectively, overlapping by 3), and all three agreed: 9.9 km, 0.1 km and
 2.4 km. There is nothing to calibrate a distance threshold against, so none
 was invented.
+
+**R-N18** THE REGION COMES FROM THE SAME POSITION AS THE PEAK. It used to
+come from the model while the peak came from a guidebook page, so the two
+could contradict each other inside one folder name. Measured on a full run,
+11 of the 21 folders carrying country + region + a known peak named a peak
+that is not in the region claimed. The genuine contradictions:
+
+```
+IT_Aosta-Valley_Haute-Montagne     the peak is in Lorraine, FR
+IT_Rhone-Alpes_Col-de-la-Fourche   a French col filed under Italy
+FR_Valais_Cerisier                 a Swiss canton for a French crag
+FR_Haute-Savoie_Aiguille-Dibona    the Ecrins placed in Chamonix
+```
+
+(The rest were administrative levels of the same place -- `Haute-Savoie`
+against `Rhone-Alpes` -- not errors.)
+
+The region is now derived from the event's own position, overwriting
+whatever was claimed, and a contradicted mountain_range is cleared. This
+makes the two consistent by construction. A prettier name that contradicts
+the peak beside it is not worth having.

@@ -462,14 +462,29 @@ class TestTheCantonReachesTheFolderName(unittest.TestCase):
         self.assertEqual(fill_admin_regions([event]), 0)
         self.assertIsNone(event.region)
 
-    def test_a_massif_is_not_overwritten_by_a_canton(self):
-        """Ecrins says more than Rhone-Alpes."""
+    def test_the_position_overrules_a_claimed_massif(self):
+        """This assertion used to be the opposite, on the reasoning that
+        "Ecrins" says more than "Rhone-Alpes". A full run overturned it.
+
+        The region came from the model while the peak came from a page, so
+        the two could disagree inside one folder name:
+
+            IT_Aosta-Valley_Haute-Montagne   peak is in Lorraine, FR
+            IT_Rhone-Alpes_Col-de-la-Fourche a French col filed in Italy
+            FR_Valais_Cerisier               a Swiss canton, a French crag
+            FR_Haute-Savoie_Aiguille-Dibona  the Ecrins put in Chamonix
+
+        Deriving the region from the SAME position the peak came from makes
+        them consistent by construction. A prettier name that contradicts
+        the peak beside it is not worth having.
+        """
         from photo_organizer.geo import fill_admin_regions
 
         event = self._event(44.9632, 6.2429, "Aiguille Dibona")
-        event.region = "Ecrins"
+        event.region = "Mont Blanc Massif"      # what the model claimed
         fill_admin_regions([event])
-        self.assertEqual(event.region, "Ecrins")
+        self.assertEqual(event.region, "Rhone-Alpes")
+        self.assertIsNone(event.mountain_range)
 
     def test_the_name_carries_peak_canton_and_country(self):
         from photo_organizer.analyze import build_folder_name

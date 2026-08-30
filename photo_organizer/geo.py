@@ -448,8 +448,15 @@ def fill_admin_regions(events) -> int:
         lon = getattr(event, "enriched_lon", None)
         if lat is None or lon is None:
             continue
-        if event.region and event.country_code:
-            continue
+        # OVERWRITE, not fill. The region used to be whatever the model
+        # said while the peak came from a page, so the two could disagree
+        # inside one folder name: measured on a real run,
+        # IT_Aosta-Valley_Haute-Montagne named a peak in Lorraine,
+        # IT_Rhone-Alpes_Col-de-la-Fourche put a French col in Italy,
+        # FR_Valais_Cerisier used a Swiss canton for a French crag, and
+        # FR_Haute-Savoie_Aiguille-Dibona put the Ecrins in Chamonix.
+        # Deriving the region from the SAME position the peak came from
+        # makes the two consistent by construction.
         pending.append((event, (float(lat), float(lon))))
     if not pending:
         return 0
@@ -469,10 +476,15 @@ def fill_admin_regions(events) -> int:
     for (event, _point), hit in zip(pending, hits):
         admin = (hit.get("admin1") or "").strip()
         country = (hit.get("cc") or "").strip()
-        if admin and not event.region:
+        if admin:
             event.region = admin
-        if country and not event.country_code:
+        if country:
             event.country_code = country
+        # A claimed massif that contradicts the position is worse than no
+        # massif, and the name builder falls back to it when there is no
+        # region at all.
+        if admin:
+            event.mountain_range = None
         if admin or country:
             filled += 1
     return filled
