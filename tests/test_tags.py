@@ -481,3 +481,53 @@ class TestTheCantonReachesTheFolderName(unittest.TestCase):
         build_folder_name(event, Config().naming)
         for expected in ("Dammazwillinge", "Uri", "CH"):
             self.assertIn(expected, event.proposed_name)
+
+
+class TestTheCantonBeatsTheClaimedMassif(unittest.TestCase):
+    """Measured on the real library: the Aiguille Dibona event was filed as
+    FR_Mont-Blanc-Massif_Aiguille-Dibona -- 200 km from the Ecrins -- and
+    Dammazwillinge as plain "Alps". The canton comes from the event's own
+    position and cannot be wrong that way."""
+
+    def _event(self):
+        from photo_organizer.models import Event, Photo
+
+        photo = Photo(source_path=Path("/src/a.jpg"))
+        photo.timestamp = datetime(2019, 9, 11, 9)
+        event = Event(index=1, photos=[photo])
+        event.place_name = "Aiguille Dibona"
+        event.country_code = "FR"
+        return event
+
+    def test_the_canton_wins_when_both_are_known(self):
+        from photo_organizer.analyze import build_folder_name
+        from photo_organizer.config import Config
+
+        event = self._event()
+        event.mountain_range = "Mont Blanc Massif"
+        event.region = "Rhone-Alpes"
+        build_folder_name(event, Config().naming)
+        self.assertIn("Rhone-Alpes", event.proposed_name)
+        self.assertNotIn("Mont-Blanc", event.proposed_name)
+
+    def test_a_claimed_massif_is_used_when_there_is_no_canton(self):
+        """Better than nothing, when the event has no position at all."""
+        from photo_organizer.analyze import build_folder_name
+        from photo_organizer.config import Config
+
+        event = self._event()
+        event.mountain_range = "Ecrins Massif"
+        build_folder_name(event, Config().naming)
+        self.assertIn("Ecrins", event.proposed_name)
+
+    def test_useless_regions_are_dropped(self):
+        """"Alps" appeared on 25 folders and says nothing the country does
+        not already say."""
+        from photo_organizer.analyze import build_folder_name
+        from photo_organizer.config import Config
+
+        event = self._event()
+        event.mountain_range = "Alps"
+        build_folder_name(event, Config().naming)
+        self.assertNotIn("Alps", event.proposed_name)
+        self.assertIn("Aiguille-Dibona", event.proposed_name)

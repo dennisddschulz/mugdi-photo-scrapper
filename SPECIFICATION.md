@@ -846,3 +846,25 @@ Guttannen and, for the Mont Blanc summit which straddles the border,
 Courmayeur on the Italian side of a French trip. They appear on guidebook
 pages, but reading an area name from OCR has no gazetteer to check it
 against, which is what produced "Se Pe" and "Le Toit".
+
+**R-N16** THE CANTON BEATS THE CLAIMED MASSIF. This was the other way
+round, on the reasoning that `Ecrins` says more than `Rhone-Alpes`. It does
+-- when it is right. Measured on a full run of the real library it often is
+not: the Aiguille Dibona event was filed as
+`FR_Mont-Blanc-Massif_Aiguille-Dibona_alpine-climbing_11_09`, 200 km from
+the Ecrins, and Dammazwillinge as plain `Alps`. Of 340 event folders, 25
+carried the range `Alps` and 8 `Mont-Blanc-Massif`.
+
+The canton comes from the event's own position through an offline lookup
+and cannot be wrong in that way. The model's range is still used where
+there is no position at all, because a claimed massif beats nothing, and
+vague values (`Alps`, `Europe`) are dropped entirely.
+
+**R-N17** A TOPO CROSS-CHECK IS NOT IMPLEMENTED, and the measurement says
+why. The concern is real -- the user photographs guidebook pages for routes
+they do not climb, so a read peak can be aspirational, and the region is
+derived from that peak's position. But on a full run only THREE events had
+both a photo-consensus position and a name read from a page (28 and 26
+respectively, overlapping by 3), and all three agreed: 9.9 km, 0.1 km and
+2.4 km. There is nothing to calibrate a distance threshold against, so none
+was invented.

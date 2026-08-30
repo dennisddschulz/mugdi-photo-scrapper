@@ -67,6 +67,11 @@ PEAK_PRIOR = {
 # failed the API on two consecutive runs scored 0.96.
 PAGE_SCORE_SKIP = 0.85
 
+# Region names too vague to be worth a folder. "Alps" appeared on 25 event
+# folders and says nothing that the country does not already say.
+_USELESS_REGIONS = {"alps", "alpes", "alpen", "europe", "unknown", "none",
+                    "mountains", "the-alps"}
+
 # The model's own stated confidence barely moves the answer, on purpose. In
 # the one case we adjudicated it said "high" and was wrong, while the true
 # answer carried no confidence at all. It is a weak signal, not a prior.
@@ -664,8 +669,20 @@ def build_folder_name(event, naming, peak_source: str = "peak") -> str:
     parts: list[str] = []
     if naming.include_country and event.country_code:
         parts.append(slug(event.country_code))
-    # A massif beats a canton: "Ecrins" says more than "Rhone-Alpes".
-    region = event.mountain_range or event.region
+    # The CANTON wins over the model's claimed massif, when we have one.
+    #
+    # This was the other way round, on the reasoning that "Ecrins" says more
+    # than "Rhone-Alpes". It does -- when it is right. Measured on the real
+    # library it often is not: the Aiguille Dibona event was filed as
+    # FR_Mont-Blanc-Massif_Aiguille-Dibona, 200 km from the Ecrins, and
+    # Dammazwillinge as plain "Alps". The canton comes from the event's own
+    # position through an offline lookup and cannot be wrong that way.
+    #
+    # The model's range is still used where there is no position at all,
+    # because a claimed massif beats nothing.
+    region = event.region or event.mountain_range
+    if region and slug(region).lower() in _USELESS_REGIONS:
+        region = event.region or None
     if naming.include_region and region:
         parts.append(slug(region))
 
