@@ -1475,6 +1475,45 @@ def analyze_plan(
                     apply_to_event(event, merged, config,
                                    consensus_location(found))
 
+    # --- what the whole event actually shows ------------------------------
+    # The activity used to come from a majority vote over the four photos
+    # Gemini analysed, and on a climbing trip four sampled frames are often
+    # the walk in: measured, the Aiguille Dibona and Dammazwillinge events
+    # were both labelled "hiking". The local tags see EVERY photo and say
+    # climbing for 90% and 81% of them respectively.
+    #
+    # Tagging here rather than at copy time costs nothing overall: the
+    # results are stored, and the copy reuses them.
+    try:
+        from .tags import ACTIVITY_TAGS, tag_library
+
+        every = [ph for ev in plan.events for ph in ev.photos]
+        for ph in every:
+            if not ph.content_key:
+                ph.content_key = content_hash(ph.source_path, ph.size_bytes)
+        local = tag_library(every, store, should_cancel=should_cancel)
+        if local:
+            changed = 0
+            for event in plan.events:
+                votes: dict[str, int] = {}
+                for ph in event.photos:
+                    for tag in local.get(ph.content_key or "", ()):
+                        if tag in ACTIVITY_TAGS:
+                            votes[tag] = votes.get(tag, 0) + 1
+                if not votes:
+                    continue
+                best = max(votes, key=lambda k: votes[k])
+                # Only override when a real share of the event agrees, so a
+                # couple of stray frames cannot rename a trip.
+                if votes[best] >= max(3, 0.2 * len(event.photos)):
+                    if event.activity != best:
+                        changed += 1
+                    event.activity = best
+            say(f"  Activity taken from every photo, not the four analysed: "
+                f"{changed} event(s) relabelled.")
+    except Exception as exc:
+        log.warning("Local activity tagging skipped: %s", exc)
+
     # --- the canton, now that positions are known -------------------------
     # Geocoding runs before naming, when only 1 of 379 events has any GPS.
     # By this point fifty-odd events have a position worked out from peaks

@@ -140,6 +140,9 @@ def cannot_place(tags) -> bool:
 _SUPPRESSED_BY_DOCUMENT = ("activity", "terrain", "people")
 _DOCUMENT_TAGS = ("document", "screenshot")
 
+# The tags that describe what people were DOING, used to label an event.
+ACTIVITY_TAGS = ("climbing", "ski touring", "hiking")
+
 MAX_TAGS = 12
 
 # How sharply the raw cosine similarities are turned into probabilities.
