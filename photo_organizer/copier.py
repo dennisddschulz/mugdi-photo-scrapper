@@ -291,14 +291,26 @@ def copy_plan(
             if not getattr(photo, "content_key", None):
                 photo.content_key = content_hash(photo.source_path,
                                                  photo.size_bytes)
-        local_tags = tag_library(
-            every, store,
-            on_progress=(lambda done, total, path:
-                         on_progress(done, total, getattr(path, "name", ""))
-                         if on_progress else None),
-            should_cancel=should_cancel,
-        )
-        say(f"  tagged {len(local_tags)} photo(s) locally")
+        try:
+            local_tags = tag_library(
+                every, store,
+                on_progress=(lambda done, total, path:
+                             on_progress(done, total, getattr(path, "name", ""))
+                             if on_progress else None),
+                should_cancel=should_cancel,
+            )
+            say(f"  tagged {len(local_tags)} photo(s) locally")
+        except CopyCancelled:
+            raise
+        except Exception as exc:
+            # Loading the model reaches out to the model hub even when the
+            # weights are cached. A blip there must not destroy a 50 GB
+            # copy: the photos are what matter, and tags can be added by a
+            # later run for nothing, because the embeddings are stored.
+            local_tags = {}
+            say(f"  local tagging unavailable ({exc}). Copying without it; "
+                "run again later to add tags at no cost.")
+            log.warning("Local tagging failed: %s", exc, exc_info=True)
 
     total = plan.photo_count
     stats.planned = total
