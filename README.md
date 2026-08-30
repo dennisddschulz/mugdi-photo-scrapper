@@ -689,3 +689,26 @@ of what that is worth: it says nothing about gaze, blinks or composition,
 and it usually agrees with plain file size, because a sharper JPEG is a
 bigger one. It is a reason rather than a coincidence, which is the most
 that can honestly be claimed for it.
+
+#### Checked at library scale
+
+The 24-photo score above is a small sample, so the tags were also checked
+across the whole library. Tag frequencies over 500 random photos:
+
+```
+people 86%   clear sky 74%   climbing 73%   snow 56%
+rock face 36%   glacier 20%   summit 14%   document 3%
+```
+
+86% looked far too high -- the labelled set says 58% -- so twelve photos
+tagged `people` were inspected. Ten genuinely contain a person, often a
+small figure on a big face or ridge. The two wrong ones are a sunset
+glacier panorama and a hut in fog. The frequency is real: this is a
+partner sport, and most frames have the other person in them.
+
+The activity weakness is visible in the same twelve: one skier came back
+`climbing`. Coarse activities are right far more often than fine ones,
+but `climbing` still absorbs some ski touring.
+
+Tagging a fully-embedded library takes about 12 minutes -- that is SQLite
+reads and file fingerprinting, not the model, which is never run again.

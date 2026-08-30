@@ -750,3 +750,12 @@ sharpness when the analysis is missing, which covers every group. This is
 a weaker signal, and the docs say so: it knows nothing about gaze, blinks
 or composition, and it agrees with file size most of the time because a
 sharper JPEG is usually a bigger one.
+
+**R-N12** TAG QUALITY IS CHECKED AT LIBRARY SCALE, not only on the
+labelled sample. Measured over 500 random photos: people 86%, clear sky
+74%, climbing 73%, snow 56%, document 3%. The 86% was investigated as
+suspected over-firing -- the labelled set says 58% -- and twelve photos
+tagged `people` were inspected directly: ten contain a person, usually a
+small figure on a large face. The frequency is a property of the library,
+not a fault. In the same twelve, one skier was tagged `climbing`, which is
+the documented cost of using coarse activities.
