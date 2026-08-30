@@ -129,6 +129,15 @@ CREATE TABLE IF NOT EXISTS clip_embedding (
     vector       BLOB NOT NULL
 );
 
+-- Content tags derived from the embedding. Stored so they are worked out
+-- once and then used twice: to keep unplaceable photos out of the PAID
+-- sample, and to write keywords into the copies.
+CREATE TABLE IF NOT EXISTS photo_tags (
+    content_hash TEXT PRIMARY KEY,
+    tagged_at    TEXT NOT NULL,
+    tags_json    TEXT NOT NULL
+);
+
 -- Batch jobs, so a submitted job survives the app being closed. A batch can
 -- take up to 24 hours; losing the job name would mean paying twice.
 CREATE TABLE IF NOT EXISTS batch_job (
@@ -633,6 +642,41 @@ class AnalysisStore:
                 (content_hash, datetime.now().isoformat(timespec="seconds"),
                  model, int(flat.size), flat.tobytes()),
             )
+
+    def get_tags(self, content_hash: str):
+        if not content_hash:
+            return None
+        import json
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT tags_json FROM photo_tags WHERE content_hash=?",
+                (content_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return list(json.loads(row["tags_json"]))
+        except (ValueError, TypeError):
+            return None
+
+    def put_tags(self, content_hash: str, tags) -> None:
+        if not content_hash:
+            return
+        import json
+
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO photo_tags (content_hash, tagged_at, tags_json)"
+                " VALUES (?,?,?) ON CONFLICT(content_hash) DO UPDATE SET"
+                "  tagged_at=excluded.tagged_at, tags_json=excluded.tags_json",
+                (content_hash, datetime.now().isoformat(timespec="seconds"),
+                 json.dumps(list(tags))),
+            )
+
+    def tags_count(self) -> int:
+        with self._connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM photo_tags").fetchone()[0]
 
     def embedding_count(self) -> int:
         with self._connect() as conn:

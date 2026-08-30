@@ -30,6 +30,9 @@ from typing import Callable, Optional, Sequence
 from .config import Config
 from .models import Event, Photo, Plan
 from .schema import PhotoAnalysis
+from .pages import MODEL_NAME as PAGE_MODEL
+from .tags import (PAPERWORK_THRESHOLD, blacklisted_word, cannot_place,
+                   paperwork_score)
 
 # P(this peak name is the right one), given only how it was obtained.
 #
@@ -55,6 +58,14 @@ PEAK_PRIOR = {
     "generic_inference": 0.05,
     "none": 0.02,
 }
+
+# How page-like a photo must be before it is kept out of the PAID sample.
+# Higher than the 0.5 used to decide what OCR reads, deliberately: reading a
+# borderline photo costs a second, while wrongly excluding one from the paid
+# sample could cost an event its name. Measured on this library, 556 photos
+# of 13,825 (4.0%) score at or above 0.5, and the IKEA mattress label that
+# failed the API on two consecutive runs scored 0.96.
+PAGE_SCORE_SKIP = 0.85
 
 # The model's own stated confidence barely moves the answer, on purpose. In
 # the one case we adjudicated it said "high" and was wrong, while the true
@@ -202,6 +213,20 @@ def select_photos(
     ] or event.photos
     if not usable:
         return []
+
+    # Photographs of printed pages are dropped from the paid sample, because
+    # a picture of paper cannot say where an event was. Measured: an IKEA
+    # mattress label scored 0.96 on the page detector, was sent to the API
+    # on two consecutive runs, and failed both times -- having consumed one
+    # of that event's four slots each time. Their text is read by OCR for
+    # nothing, which is where their value actually is.
+    #
+    # Only if that leaves nothing does the sample fall back to including
+    # them: an event of nothing but topos is still better named from a topo
+    # than from silence.
+    not_pages = [p for p in usable if not getattr(p, "is_page", False)]
+    if not_pages:
+        usable = not_pages
     # 0 means every photo. Each one is analysed once in its life and cached
     # forever, so full coverage costs a few dollars once rather than a
     # sampling decision that has to be revisited whenever a name is missed.
@@ -1091,6 +1116,62 @@ def analyze_plan(
         log.warning("Could not collect earlier batches: %s", exc)
         say(f"Could not collect earlier batches ({exc}); continuing.")
 
+    # --- keep unplaceable photos out of the paid sample -------------------
+    # Only photographs that could name a place are worth paying for. What
+    # was there before -- a brightness heuristic -- does not do this job:
+    # measured, it scores an indoor fireplace 1.82 and a summit ridge 0.89,
+    # because a bright wall reads as sky. The CLIP tags do, and they are
+    # already in the cache.
+    pages_found = unplaceable_found = paperwork_found = 0
+    blacklisted = 0
+    for event in targets:
+        for photo in event.photos:
+            key = photo.content_key
+            if not key:
+                continue
+            score = store.get_page_score(key)
+            if score is not None and score >= PAGE_SCORE_SKIP:
+                photo.is_page = True
+                pages_found += 1
+                # A picture of paper that is a receipt, a ticket or a price
+                # tag is not a photograph anyone wants in a library. It is
+                # COPIED ASIDE for review, never deleted (CLAUDE.md rule 4).
+                # A guidebook topo is also a picture of paper and is kept:
+                # it is what named the Aiguille Dibona.
+                # The words on the page first: text is certain where a
+                # similarity score is a judgement. "IKEA" settles it.
+                hit = blacklisted_word(
+                    store.get_text(key) or "",
+                    getattr(settings, "document_blacklist", ()),
+                )
+                if hit:
+                    photo.reject_reason = "paperwork"
+                    paperwork_found += 1
+                    blacklisted += 1
+                    continue
+                vector = store.get_embedding(key, PAGE_MODEL)
+                if vector is not None:
+                    junk = paperwork_score(vector)
+                    if junk is not None and junk >= PAPERWORK_THRESHOLD:
+                        photo.reject_reason = "paperwork"
+                        paperwork_found += 1
+                continue
+            tags = store.get_tags(key)
+            if tags and cannot_place(tags):
+                photo.is_page = True      # same effect: not worth paying for
+                unplaceable_found += 1
+    if pages_found or unplaceable_found:
+        say(f"  {pages_found} picture(s) of printed pages and "
+            f"{unplaceable_found} indoor/close-up photo(s) are not sent to "
+            "the paid analysis; they cannot say where an event was.")
+    if blacklisted:
+        say(f"  {blacklisted} matched a blacklisted word (IKEA, Rechnung, "
+            "Migros and the rest of analysis.document_blacklist).")
+    if paperwork_found:
+        say(f"  {paperwork_found} of those are receipts, tickets or price "
+            "tags. They go to _rejected_review/paperwork/ for you to bin. "
+            "Nothing is deleted, and guidebook pages are kept.")
+
     # --- what needs analysing -------------------------------------------
     chosen: list[tuple[str, Photo]] = []
     for event in targets:
@@ -1202,6 +1283,15 @@ def analyze_plan(
             result = client.collect(job_name)
             stats.returned += len(result.analyses)
             stats.failed += len(result.errors)
+            # Say WHY. The messages were collected and then thrown away, so
+            # the same photo failed on two consecutive runs and reported
+            # only "1 failed" both times -- which is unactionable.
+            for key, message in list(result.errors.items())[:5]:
+                failed_photo = by_hash.get(key)
+                name = failed_photo.source_path.name if failed_photo else key[:16]
+                say(f"    could not analyse {name}: {message}")
+            if len(result.errors) > 5:
+                say(f"    ... and {len(result.errors) - 5} more")
             for key, analysis in result.analyses.items():
                 photo = by_hash.get(key)
                 if photo is None:

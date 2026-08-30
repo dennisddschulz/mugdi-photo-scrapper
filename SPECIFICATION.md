@@ -759,3 +759,43 @@ tagged `people` were inspected directly: ten contain a person, usually a
 small figure on a large face. The frequency is a property of the library,
 not a fault. In the same twelve, one skier was tagged `climbing`, which is
 the documented cost of using coarse activities.
+
+**R-A7** ONLY PHOTOGRAPHS THAT COULD NAME A PLACE ARE PAID FOR. The claim
+that a scenic heuristic already did this was FALSE, and measuring it is how
+that was found: it scores an indoor fireplace 1.82 and a summit ridge 0.89,
+because a bright wall reads as sky. It is the same failure as the four
+pixel-based page detectors.
+
+Selection now uses the cached CLIP tags. A photo tagged document, screenshot,
+food, indoors or portrait is kept out of the paid sample, as is anything
+scoring >= 0.85 on the page detector. If that would leave an event with
+nothing, the sample falls back to including them -- an event named from a
+topo beats an event named from silence.
+
+This was found by a real failure: a photograph of an IKEA mattress label
+(page score 0.96) was sent to the API on two consecutive runs and failed
+both times, having consumed one of its event's four slots each time. Small
+events were the hole -- `len(usable) <= per_event` returned every photo
+without ranking, and that event had three photos against a budget of four.
+
+**R-A8** THE REASON A PHOTO FAILED IS REPORTED. The messages were collected
+and then discarded, so the same photo failed twice and reported only
+"1 failed" both times, which is unactionable.
+
+**R-D7** PAPERWORK IS SET ASIDE, NEVER DELETED. A receipt, ticket or price
+tag is a picture of paper and is rubbish; a guidebook topo is a picture of
+paper and is what named the Aiguille Dibona. They are separated two ways:
+a blacklist of words checked against the OCR text already read (IKEA,
+Rechnung, Migros -- extend it in `analysis.document_blacklist`), and, for
+pages with no matching word, a CLIP score with a deliberately high bar of
+0.90.
+
+Measured: of 436 photos scoring >= 0.85 as printed pages, 17 score >= 0.90
+as paperwork. The twelve most paperwork-like were inspected and all twelve
+were junk -- train tickets, BKW invoices, a supermarket discount sticker,
+pharmacy packaging, tax letters and the IKEA label. No guidebook page
+appeared among them.
+
+Matches are COPIED to `_rejected_review/paperwork/` and never deleted, and
+nothing is ever removed from the source (rules 1 and 4). The user empties
+that one folder.

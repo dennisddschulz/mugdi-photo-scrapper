@@ -119,6 +119,22 @@ BINARY: dict[str, tuple[float, str, str]] = {
                   "a photo under a grey overcast sky"),
 }
 
+# Tags that mean "this photo cannot tell anyone where you were".
+#
+# These are kept out of the PAID sample. A photograph of an IKEA mattress
+# label was sent to the API on two consecutive runs and failed both times,
+# having taken one of its event's four slots each time. The scenic heuristic
+# that was supposed to prevent this does not: measured, it scores an indoor
+# fireplace 1.82 and a summit ridge 0.89, because a bright wall reads as sky.
+UNPLACEABLE = frozenset({"document", "screenshot", "food", "indoors",
+                         "portrait"})
+
+
+def cannot_place(tags) -> bool:
+    """True when nothing in this photo could name a place."""
+    return any(tag in UNPLACEABLE for tag in tags)
+
+
 # Facets that describe the outdoors and mean nothing on a picture of paper.
 # Measured: a photograph of a guidebook page scored "rain" at 0.99.
 _SUPPRESSED_BY_DOCUMENT = ("activity", "terrain", "people")
@@ -341,8 +357,99 @@ def tag_library(
                         pass
         else:
             reused += 1
-        out[key] = tag_photo(vector, getattr(photo, "timestamp", None))
+        stored = store.get_tags(key) if store is not None else None
+        if stored is None:
+            stored = tag_photo(vector, getattr(photo, "timestamp", None))
+            if store is not None:
+                store.put_tags(key, stored)
+        out[key] = stored
 
     log.info("Tagged %d photo(s): %d embedded, %d reused from cache",
              len(out), encoded, reused)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Paperwork: pictures of paper that are not worth keeping in a photo library.
+# ---------------------------------------------------------------------------
+#
+# A guidebook topo is a picture of paper and is precious -- it is what named
+# the Aiguille Dibona. A train ticket is a picture of paper and is rubbish.
+# Both score the same on the page detector, so they are separated here.
+#
+# Measured on this library: of 436 photos scoring >=0.85 as printed pages,
+# 17 score >=0.90 as paperwork. The twelve most paperwork-like were
+# inspected and all twelve were junk -- train tickets, BKW invoices, a
+# supermarket discount sticker, pharmacy packaging, tax letters and an IKEA
+# mattress label. No guidebook page appeared among them.
+PAPERWORK_KEEP = (
+    "a page from a climbing guidebook with a route topo drawn on a photo of a cliff",
+    "a printed page of a book with paragraphs of text",
+    "a topographic map",
+)
+PAPERWORK_TRASH = (
+    "a product label or price tag on packaging in a shop",
+    "a paper receipt or invoice",
+    "a screenshot of a phone screen",
+    "a business card or ticket",
+)
+
+# Deliberately high. These photos are COPIED ASIDE for review, never deleted,
+# but a guidebook page sent to the review folder is a worse mistake than a
+# receipt left in the library, so the bar favours keeping.
+PAPERWORK_THRESHOLD = 0.90
+
+_paperwork_cache = None
+
+
+def _paperwork_features():
+    global _paperwork_cache
+    if _paperwork_cache is not None:
+        return _paperwork_cache
+    import open_clip
+    import torch
+
+    from .pages import MODEL_NAME, _load
+
+    model, _preprocess, _page_text = _load()
+    tokenizer = open_clip.get_tokenizer(MODEL_NAME)
+    with torch.no_grad():
+        feats = model.encode_text(
+            tokenizer(list(PAPERWORK_KEEP) + list(PAPERWORK_TRASH))
+        )
+        feats /= feats.norm(dim=-1, keepdim=True)
+    _paperwork_cache = feats.cpu().numpy()
+    return _paperwork_cache
+
+
+def paperwork_score(vector) -> Optional[float]:
+    """How much an already-embedded page is paperwork rather than a topo."""
+    try:
+        import numpy as np
+
+        sims = SOFTMAX_SCALE * np.asarray(vector, dtype="float32") @ (
+            _paperwork_features().T
+        )
+        exp = np.exp(sims - sims.max())
+        probs = exp / exp.sum()
+        return float(probs[len(PAPERWORK_KEEP):].sum())
+    except Exception as exc:
+        log.debug("Could not score paperwork: %s", exc)
+        return None
+
+
+def blacklisted_word(text: str, blacklist) -> Optional[str]:
+    """The first blacklisted word in this OCR text, if any.
+
+    Whole words only, case-insensitive. "vat" must not fire on "private",
+    and a peak called Coopstock must not fire on "coop".
+    """
+    if not text or not blacklist:
+        return None
+    import re
+
+    words = set(re.findall(r"[a-z]+", text.lower()))
+    for term in blacklist:
+        if term.lower() in words:
+            return term
+    return None

@@ -712,3 +712,28 @@ but `climbing` still absorbs some ski touring.
 
 Tagging a fully-embedded library takes about 12 minutes -- that is SQLite
 reads and file fingerprinting, not the model, which is never run again.
+
+### Receipts, tickets and other paperwork
+
+Phone dumps are full of photographed paperwork. Those are set aside in
+`_rejected_review/paperwork/` so the library is photographs, and you delete
+that one folder when you have glanced at it. Nothing is deleted for you,
+and nothing is ever removed from the source.
+
+Two things separate a receipt from a guidebook topo, which are both
+pictures of paper:
+
+* the words on it, checked against `analysis.document_blacklist` (IKEA,
+  Rechnung, Migros, invoice, Billett...). Add your own shops, bank or
+  insurer -- whole-word and case-insensitive, so `vat` will not fire on
+  `private`;
+* failing that, a CLIP score with a high bar (0.90), because sending a
+  guidebook page to the review folder is a worse mistake than leaving a
+  receipt in the library.
+
+Measured: 17 of 436 photographed pages, and the twelve most paperwork-like
+were all genuinely junk on inspection -- train tickets, invoices, pharmacy
+packaging, an IKEA mattress label. No guidebook page among them.
+
+They are also kept out of the paid analysis, along with anything tagged
+indoors, food or portrait. A picture of paper cannot say where you were.

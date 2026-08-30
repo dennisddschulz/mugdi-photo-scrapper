@@ -188,3 +188,118 @@ class TestSharpnessChoosesTheKeeper(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPagesAreNotPaidFor(unittest.TestCase):
+    """A picture of paper cannot say where an event was.
+
+    An IKEA mattress label scored 0.96 on the page detector, was sent to the
+    API on two consecutive runs and failed both times -- having consumed one
+    of that event's four paid slots each time.
+    """
+
+    def _event(self, count, pages=()):
+        from photo_organizer.models import Event, Photo
+
+        photos = []
+        for n in range(count):
+            photo = Photo(source_path=Path(f"/src/{n}.jpg"))
+            photo.timestamp = datetime(2020, 6, 1, 9 + n)
+            photo.is_page = n in pages
+            photos.append(photo)
+        return Event(index=1, photos=photos)
+
+    def test_pages_are_left_out_of_the_sample(self):
+        from photo_organizer.analyze import select_photos
+
+        event = self._event(6, pages=(0, 1))
+        chosen = select_photos(event, per_event=4)
+        self.assertTrue(all(not p.is_page for p in chosen),
+                        "a photograph of a page was sent to the paid analysis")
+
+    def test_an_event_of_only_pages_still_gets_sampled(self):
+        """Better named from a topo than from silence."""
+        from photo_organizer.analyze import select_photos
+
+        event = self._event(3, pages=(0, 1, 2))
+        self.assertEqual(len(select_photos(event, per_event=2)), 2)
+
+    def test_the_skip_threshold_is_stricter_than_the_reading_one(self):
+        """Reading a borderline photo costs a second; wrongly excluding one
+        from the paid sample could cost an event its name."""
+        from photo_organizer.analyze import PAGE_SCORE_SKIP
+        from photo_organizer.pages import PAGE_THRESHOLD
+
+        self.assertGreater(PAGE_SCORE_SKIP, PAGE_THRESHOLD)
+
+
+class TestPaperworkIsSetAsideNotDeleted(unittest.TestCase):
+    """A train ticket is a picture of paper and is rubbish. A guidebook topo
+    is a picture of paper and is what named the Aiguille Dibona."""
+
+    def test_the_threshold_favours_keeping(self):
+        """A guidebook page sent to the review folder is a worse mistake
+        than a receipt left in the library."""
+        from photo_organizer.tags import PAPERWORK_THRESHOLD
+
+        self.assertGreaterEqual(PAPERWORK_THRESHOLD, 0.85)
+
+    def test_guidebook_prompts_are_on_the_keep_side(self):
+        from photo_organizer.tags import PAPERWORK_KEEP, PAPERWORK_TRASH
+
+        keep = " ".join(PAPERWORK_KEEP).lower()
+        self.assertIn("guidebook", keep)
+        self.assertIn("topo", keep)
+        trash = " ".join(PAPERWORK_TRASH).lower()
+        for expected in ("receipt", "label", "ticket"):
+            self.assertIn(expected, trash)
+
+    def test_paperwork_is_a_reject_reason_not_a_deletion(self):
+        """CLAUDE.md rule 4: suspected junk is copied aside, never deleted.
+        Nothing in the codebase may delete a source file."""
+        import inspect
+
+        from photo_organizer import copier
+
+        body = inspect.getsource(copier._copy_rejected)
+        self.assertIn("shutil.copy2(photo.source_path", body)
+        # It DOES unlink -- a copy that failed verification, inside the
+        # output. What must never happen is anything destructive aimed at
+        # the SOURCE.
+        for verb in ("unlink", "os.remove", "shutil.move", "os.rename",
+                     "rmtree", "write_bytes", "write_text"):
+            self.assertNotIn(f"photo.source_path.{verb}", body)
+            self.assertNotIn(f"{verb}(photo.source_path", body)
+
+
+class TestTheBlacklist(unittest.TestCase):
+    """Text beats a classifier: IKEA on a page is certain."""
+
+    def test_it_matches_a_blacklisted_word(self):
+        from photo_organizer.tags import blacklisted_word
+
+        text = "Matelas en mousse MORGEDAL 90x200 Design IKEA of Sweden 179.-"
+        self.assertEqual(blacklisted_word(text, ("ikea", "coop")), "ikea")
+
+    def test_it_matches_whole_words_only(self):
+        """'vat' must not fire on 'private', and a peak called Coopstock
+        must not be thrown away because of 'coop'."""
+        from photo_organizer.tags import blacklisted_word
+
+        self.assertIsNone(blacklisted_word("a private crag", ("vat",)))
+        self.assertIsNone(blacklisted_word("Coopstock south face", ("coop",)))
+
+    def test_a_guidebook_page_is_not_blacklisted(self):
+        from photo_organizer.config import AnalysisConfig
+        from photo_organizer.tags import blacklisted_word
+
+        page = ("Pointes Lachenal South Face Mixed Pelissier Gully "
+                "Aiguille du Midi arete des Cosmiques Vallee Blanche")
+        self.assertIsNone(
+            blacklisted_word(page, AnalysisConfig().document_blacklist))
+
+    def test_empty_input_is_safe(self):
+        from photo_organizer.tags import blacklisted_word
+
+        self.assertIsNone(blacklisted_word("", ("ikea",)))
+        self.assertIsNone(blacklisted_word("anything", ()))

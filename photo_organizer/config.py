@@ -263,6 +263,23 @@ class AnalysisConfig:
     # already embedded for page detection are tagged for free because the
     # embedding is stored. Scored 110/119 against 24 hand-labelled photos.
     local_tags: bool = True
+    # Words that mark a photographed page as paperwork rather than a
+    # guidebook. Checked against the text OCR already read, so it costs
+    # nothing. Text beats a classifier here: "IKEA" on a page is certain,
+    # while a similarity score is a judgement.
+    #
+    # Matches are set aside in _rejected_review/paperwork/ -- never deleted,
+    # and never removed from the source (CLAUDE.md rules 1 and 4). Delete
+    # that one folder yourself once you have glanced at it.
+    #
+    # Add your own: shops you photograph receipts in, your bank, your
+    # insurer. Matching is case-insensitive and on whole words.
+    document_blacklist: tuple = (
+        "ikea", "migros", "coop", "aldi", "lidl", "denner",
+        "rechnung", "quittung", "kassenbon", "beleg", "mahnung",
+        "invoice", "receipt", "vat", "billett", "facture",
+        "steuererklarung", "versicherung", "police",
+    )
     # How many photos of one event to read before giving up on it. It stops
     # early as soon as a photo names a real place.
     ocr_max_photos_per_event: int = 60
