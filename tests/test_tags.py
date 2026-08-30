@@ -395,3 +395,38 @@ class TestRouteNamesAreNotPlaces(unittest.TestCase):
 
         self.assertFalse(followed_by_grade("", "5b"))
         self.assertFalse(followed_by_grade("name", ""))
+
+
+class TestAltitudesAreNotGrades(unittest.TestCase):
+    """A regression I introduced and then measured.
+
+    German guidebooks print altitudes as "(3.275 m)". The first version of
+    the grade pattern accepted a bare digit, read that 3 as a French grade,
+    and threw away "Dammazwillinge (3.275 m)" -- a real 3275 m summit --
+    leaving the event named after a different peak on the same page.
+    """
+
+    PAGE = ("400 Dammazwillinge (3.275 m)\n"
+            "SW-Pfeiler VI+ (VI- obl.)\n1962 P. Arigoni, H.-P. Geier\n"
+            "Lange 220m Zustieg 2Std. Albert-Heim-Hutte\n")
+
+    def test_a_german_altitude_is_not_a_grade(self):
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertFalse(followed_by_grade("Dammazwillinge", self.PAGE))
+
+    def test_a_plain_altitude_is_not_a_grade(self):
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertFalse(followed_by_grade("Piz Buin", "Piz Buin 3312 m"))
+        self.assertFalse(followed_by_grade("Mont Blanc", "Mont Blanc 4808 m"))
+
+    def test_a_grade_still_needs_a_letter_or_a_sign(self):
+        """The cost of the fix, accepted deliberately: a bare digit grade is
+        no longer caught. Ambiguous digits are what ate the summit."""
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertTrue(followed_by_grade("Route", "Route 6a+"))
+        self.assertTrue(followed_by_grade("Route", "Route 7-"))
+        self.assertTrue(followed_by_grade("Pfeiler", "SW-Pfeiler VI+"))
+        self.assertFalse(followed_by_grade("Route", "Route 6"))

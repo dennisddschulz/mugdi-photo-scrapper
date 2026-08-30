@@ -389,16 +389,26 @@ def best_name(results: Sequence[OcrResult]) -> Optional[tuple]:
 #
 # Altitudes must NOT trigger this: "Salbitschijen 2981 m" is a real summit
 # with its height, and the pattern below cannot match a four-figure number.
+# A grade must carry a LETTER or a SIGN. A bare digit is not enough, and
+# that is not a detail: German guidebooks print altitudes as "(3.275 m)",
+# and a bare-digit pattern read the 3 as a French grade and threw away
+# "Dammazwillinge (3.275 m)" -- a real 3275 m summit -- leaving the event
+# named after a different peak on the same page.
 _GRADE = (
     r"(?:"
-    r"[3-9][abc]?[+-]?"          # French/sport: 5b, 6a+, 7c
-    r"|[IVX]{1,5}[+-]?"          # UIAA: IV+, VI-, VII
-    r"|5\.\d{1,2}[a-d]?"         # YDS: 5.10a
-    r"|WI\s?\d|M\d|A[0-5]"       # ice, mixed, aid
+    r"5\.\d{1,2}[a-d]?"          # YDS: 5.10a  (before the sport grade)
+    r"|[3-9][abc][+-]?"          # French/sport: 5b, 6a+, 7c
+    r"|[3-9][+-]"                # 6+, 7-
+    r"|[IVX]{2,5}[+-]?"          # UIAA: IV+, VI-, VII
+    r"|WI\s?\d|M[3-9]|A[0-5]"    # ice, mixed, aid
     r")"
+    # Nothing alphanumeric may follow. A word boundary cannot be used
+    # here: a grade ending in + or - has no word character after it, so
+    # "7-" was missed entirely. This also stops "VI" matching in "Villa".
+    r"(?![A-Za-z0-9.,])"
 )
 _GRADE_AFTER = re.compile(
-    r"[\s:.,\-]{0,4}\(?" + _GRADE + r"\b", re.IGNORECASE
+    r"[\s:.,\-]{0,4}\(?" + _GRADE, re.IGNORECASE
 )
 
 
