@@ -28,6 +28,7 @@ costs nothing but time, and the time is spent locally rather than billed.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -182,6 +183,10 @@ def read_text_hard(
         return tuple(
             peak.name
             for peak in peak_index.names_in_text(text, countries=countries or None)
+            # A name with a climbing grade after it is a route on a topo,
+            # not a place: "la cheminee 5b" named an Alpine crag after a
+            # hill in the sub-Antarctic. An altitude cannot trigger this.
+            if not followed_by_grade(peak.name, text)
         )
 
     collected: list[str] = []
@@ -342,6 +347,7 @@ def read_event(
         )
         if not text.strip():
             continue
+        names = tuple(n for n in names if not followed_by_grade(n, text))
         result = OcrResult(path=photo.source_path, text=text, names=names)
         results.append(result)
         if names:
@@ -365,3 +371,42 @@ def best_name(results: Sequence[OcrResult]) -> Optional[tuple]:
         return None
     name, result = max(candidates, key=lambda pair: specificity(pair[0]))
     return name, result
+
+
+# A name followed by a climbing grade is a ROUTE, not a place.
+#
+# This is what actually went wrong on the Kerguelen naming. OCR read a Swiss
+# crag topo correctly:
+#
+#     sektor C - petit pilier   Laenge 40 m   Einstieg 1020 m
+#     la cheminee 5b
+#     Pilier Kocher 6b+ (6b obl.)      Le pelerin 6a+
+#
+# "la cheminee 5b" is a route -- the chimney, graded 5b. It was taken for a
+# place name, the gazetteer had exactly one place spelled that way, and an
+# Alpine crag was named after a hill at -49.2150, 70.0033 in the
+# sub-Antarctic Indian Ocean.
+#
+# Altitudes must NOT trigger this: "Salbitschijen 2981 m" is a real summit
+# with its height, and the pattern below cannot match a four-figure number.
+_GRADE = (
+    r"(?:"
+    r"[3-9][abc]?[+-]?"          # French/sport: 5b, 6a+, 7c
+    r"|[IVX]{1,5}[+-]?"          # UIAA: IV+, VI-, VII
+    r"|5\.\d{1,2}[a-d]?"         # YDS: 5.10a
+    r"|WI\s?\d|M\d|A[0-5]"       # ice, mixed, aid
+    r")"
+)
+_GRADE_AFTER = re.compile(
+    r"[\s:.,\-]{0,4}\(?" + _GRADE + r"\b", re.IGNORECASE
+)
+
+
+def followed_by_grade(name: str, text: str) -> bool:
+    """Does this name appear in the text with a climbing grade after it?"""
+    if not name or not text:
+        return False
+    for match in re.finditer(re.escape(name), text, re.IGNORECASE):
+        if _GRADE_AFTER.match(text, match.end()):
+            return True
+    return False

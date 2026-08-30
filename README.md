@@ -738,3 +738,23 @@ packaging, an IKEA mattress label. No guidebook page among them.
 
 They are also kept out of the paid analysis, along with anything tagged
 indoors, food or portrait. A picture of paper cannot say where you were.
+
+### Route names are not place names
+
+A guidebook topo is full of names that are not places. On one Swiss crag
+page: `la cheminee 5b`, `Pilier Kocher 6b+`, `Le pelerin 6a+`,
+`Hitch-hiking 5c+`. Those are routes, with their grades.
+
+Reading `la cheminee` as a place name is how an Alpine crag came to be
+named after a hill in the Kerguelen Islands: the gazetteer had exactly one
+place spelled that way, and it is at -49.2150, 70.0033 in the sub-Antarctic
+Indian Ocean. OCR had done its job perfectly -- the error was in what the
+name was taken to mean.
+
+So a name with a climbing grade after it is discarded. Altitudes are safe:
+`salbitschijen 2981 m` is kept, because no four-figure number can look like
+a grade.
+
+A second, weaker guard restricts matches to Europe (latitude 35-81), since
+a country code is not a location -- Kerguelen and Chamonix are both `FR`.
+Svalbard is inside the box on purpose.

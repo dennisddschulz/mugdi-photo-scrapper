@@ -800,3 +800,28 @@ appeared among them.
 Matches are COPIED to `_rejected_review/paperwork/` and never deleted, and
 nothing is ever removed from the source (rules 1 and 4). The user empties
 that one folder.
+
+**R-N13** A NAME FOLLOWED BY A CLIMBING GRADE IS A ROUTE, NOT A PLACE.
+Measured on the real library: OCR read a Swiss crag topo perfectly --
+`sektor C - petit pilier`, `la cheminee 5b`, `Pilier Kocher 6b+`,
+`Le pelerin 6a+` -- and `la cheminee` was taken for a place name. The
+gazetteer held exactly one place spelled that way, so the event of 13 April
+2020 was named after a hill at -49.2150, 70.0033 in the sub-Antarctic
+Indian Ocean, twelve thousand kilometres from the Alps.
+
+Neither OCR nor landmark recognition was at fault; the text was read
+correctly and the mistake was in what the name was taken to mean. Route
+names are now rejected by the grade that follows them, in French/sport,
+UIAA, YDS, ice, mixed and aid notation. An ALTITUDE cannot trigger it: the
+pattern matches no four-figure number, so `salbitschijen 2981 m` and
+`Gemsplanggenstock 2752 m` are kept.
+
+**R-N14** A MATCHED PEAK MUST BE PLAUSIBLY PLACED. A country code is not a
+location: Kerguelen, Reunion, French Polynesia and the Marquesas all carry
+FR, the same code as Chamonix, so the country filter passes them. Measured:
+1,616 of 125,572 gazetteer entries (1.3%) sit outside Europe. Matches are
+restricted to latitude 35-81 and longitude -25 to 45. The northern limit is
+81 rather than 72 deliberately, to keep Svalbard, which is genuinely
+Norwegian; everything excluded is southern-hemisphere or Pacific. This is
+the weaker of the two rules -- it only stops an absurd POSITION, while
+R-N13 stops the wrong KIND of name.

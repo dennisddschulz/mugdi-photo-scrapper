@@ -303,3 +303,95 @@ class TestTheBlacklist(unittest.TestCase):
 
         self.assertIsNone(blacklisted_word("", ("ikea",)))
         self.assertIsNone(blacklisted_word("anything", ()))
+
+
+class TestPeaksMustBePlausiblyPlaced(unittest.TestCase):
+    """A country code is not a location: Kerguelen is coded FR, the same as
+    Chamonix, so 'La Cheminee' named an Alpine event after a hill at
+    -49.2150, 70.0033 in the sub-Antarctic Indian Ocean."""
+
+    def _peak(self, name, lat, lon):
+        from photo_organizer.peaks import Peak
+
+        return Peak(name=name, lat=lat, lon=lon, country="FR")
+
+    def test_an_overseas_territory_is_rejected(self):
+        from photo_organizer.peaks import PeakIndex
+
+        index = PeakIndex([self._peak("La Cheminee", -49.2150, 70.0033)])
+        self.assertEqual(len(index), 0)
+
+    def test_the_alps_are_kept(self):
+        from photo_organizer.peaks import PeakIndex
+
+        index = PeakIndex([self._peak("Aiguille Dibona", 44.9632, 6.2429)])
+        self.assertEqual(len(index), 1)
+
+    def test_svalbard_is_kept(self):
+        """Genuinely Norway, and a plausible place to have been -- which is
+        why the northern limit is 81 and not 72."""
+        from photo_organizer.peaks import PeakIndex
+
+        index = PeakIndex([self._peak("Newtontoppen", 79.0167, 17.3500)])
+        self.assertEqual(len(index), 1)
+
+    def test_the_whole_range_of_this_library_is_kept(self):
+        """Sardinia in the south, Norway in the north."""
+        from photo_organizer.peaks import PeakIndex
+
+        peaks = [self._peak("Monte Oddeu", 40.2000, 9.5000),
+                 self._peak("Store Skagastolstind", 61.4700, 7.8300)]
+        self.assertEqual(len(PeakIndex(peaks)), 2)
+
+    def test_bounds_can_be_switched_off(self):
+        from photo_organizer.peaks import PeakIndex
+
+        index = PeakIndex([self._peak("La Cheminee", -49.2, 70.0)], bounds=None)
+        self.assertEqual(len(index), 1)
+
+
+class TestRouteNamesAreNotPlaces(unittest.TestCase):
+    """The actual Kerguelen bug. OCR read a Swiss crag topo correctly:
+
+        sektor C - petit pilier   Laenge 40 m   Einstieg 1020 m
+        la cheminee 5b
+        Pilier Kocher 6b+ (6b obl.)      Le pelerin 6a+
+
+    "la cheminee 5b" is a route -- the chimney, graded 5b. Taken for a place
+    name, it matched the one gazetteer entry spelled that way and named an
+    Alpine crag after a hill at -49.2150, 70.0033.
+    """
+
+    CRAG = ("sektor C - petit pilier Lange 40 m Einstieg 1020 m\n"
+            "la cheminee 5b\nPilier Kocher 6b+ (6b obl.)\nLe pelerin 6a+\n"
+            "Hitch-hiking 5c+\n")
+    SUMMIT = ("18 | Salbit | Goschenertal\nsalbitschijen 2981 m\n"
+              "Zwillingsturm\nGemsplanggenstock 2752 m\n")
+
+    def test_a_graded_name_is_a_route(self):
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertTrue(followed_by_grade("la cheminee", self.CRAG))
+        self.assertTrue(followed_by_grade("Pilier Kocher", self.CRAG))
+        self.assertTrue(followed_by_grade("Le pelerin", self.CRAG))
+
+    def test_a_summit_with_its_altitude_is_kept(self):
+        """The pattern must not match a four-figure height."""
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertFalse(followed_by_grade("salbitschijen", self.SUMMIT))
+        self.assertFalse(followed_by_grade("Gemsplanggenstock", self.SUMMIT))
+        self.assertFalse(followed_by_grade("Zwillingsturm", self.SUMMIT))
+
+    def test_other_grade_systems(self):
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertTrue(followed_by_grade("Nose", "The Nose 5.10a classic"))
+        self.assertTrue(followed_by_grade("Directe", "Directe IV+ 200m"))
+        self.assertTrue(followed_by_grade("Gully", "Gully WI4 steep"))
+
+    def test_empty_input_is_safe(self):
+        from photo_organizer.ocr import followed_by_grade
+
+        self.assertFalse(followed_by_grade("", "5b"))
+        self.assertFalse(followed_by_grade("name", ""))

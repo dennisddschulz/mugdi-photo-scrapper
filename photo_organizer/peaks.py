@@ -385,10 +385,39 @@ def load_peaks(path: Path = DEFAULT_CACHE) -> list[Peak]:
 # --------------------------------------------------------------------------
 
 
+# Where a matched peak is allowed to be.
+#
+# The country filter is not enough, because overseas territories carry the
+# same country code as the mainland. Measured on this gazetteer: 1,616 of
+# 125,572 entries (1.3%) sit outside Europe -- 224 on Reunion, 95 in French
+# Polynesia, 72 in the Marquesas, 66 on the Kerguelen Islands, all coded FR.
+#
+# A generic French feature name then matches one of them. The event of
+# 13 April 2020 was named "La Cheminee" after a hill at -49.2150, 70.0033 in
+# the sub-Antarctic Indian Ocean, twelve thousand kilometres from the Alps.
+#
+# The northern limit is 81, not 72, deliberately: that keeps Svalbard, which
+# is genuinely Norwegian and a plausible place for this library's owner to
+# have been. Everything excluded is southern-hemisphere or Pacific.
+EUROPE_BOUNDS = (35.0, 81.0, -25.0, 45.0)   # min_lat, max_lat, min_lon, max_lon
+
+
+def within(peak, bounds) -> bool:
+    """Is this peak inside the plausible box? Unknown positions pass."""
+    if bounds is None or peak.lat is None or peak.lon is None:
+        return True
+    min_lat, max_lat, min_lon, max_lon = bounds
+    return min_lat <= peak.lat <= max_lat and min_lon <= peak.lon <= max_lon
+
+
 class PeakIndex:
     """Lookup over the gazetteer: by name, and by position."""
 
-    def __init__(self, peaks: Iterable[Peak]) -> None:
+    def __init__(self, peaks: Iterable[Peak], bounds=EUROPE_BOUNDS) -> None:
+        # Filtered at construction, so every lookup route is covered rather
+        # than the two that were remembered.
+        self.bounds = bounds
+        peaks = [p for p in peaks if within(p, bounds)]
         self.peaks: list[Peak] = list(peaks)
         self._exact: dict[str, list[Peak]] = {}
         for peak in self.peaks:
@@ -401,8 +430,8 @@ class PeakIndex:
         return len(self.peaks)
 
     @classmethod
-    def load(cls, path: Path = DEFAULT_CACHE) -> "PeakIndex":
-        return cls(load_peaks(path))
+    def load(cls, path: Path = DEFAULT_CACHE, bounds=EUROPE_BOUNDS) -> "PeakIndex":
+        return cls(load_peaks(path), bounds=bounds)
 
     def match(
         self,
