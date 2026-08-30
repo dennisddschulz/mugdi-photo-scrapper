@@ -1473,6 +1473,7 @@ def read_events_locally(
         peak = peak_index.verify(name, countries=settings.peak_countries)
         event.place_name = name
         event.name_source = "peak"
+        event.name_from_text = True
         if peak is not None:
             event.enriched_lat, event.enriched_lon = peak.lat, peak.lon
             event.country_code = peak.country or event.country_code

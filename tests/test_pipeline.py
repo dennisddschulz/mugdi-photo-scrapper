@@ -3918,5 +3918,79 @@ class TestClearingTheOutput(unittest.TestCase):
         self.assertEqual((removed, freed), (1, 5))
         self.assertTrue((self.output / "2025" / "a.jpg").exists())
 
+class TestAReadNameSurvivesAMerge(unittest.TestCase):
+    """The Aiguille Dibona bug, in full.
+
+    OCR read "Aiguille Dibona" off a guidebook page in the 11 September
+    event. The trip merge then joined 11 and 12 September -- correctly --
+    but cleared the name so it could be re-derived, and the re-derivation
+    fell back to a recognised range. 86 photos of the Ecrins were filed
+    under Mont-Blanc-Massif, 200 km away.
+    """
+
+    def _event(self, index, day, count=2):
+        from photo_organizer.models import Event, Photo
+
+        photos = []
+        for n in range(count):
+            photo = Photo(source_path=Path(f"/src/d{day}_{n}.jpg"))
+            # Morning to evening, so consecutive days are a night apart
+            # (13 h) rather than the 23 h that two 09:00 photos imply.
+            photo.timestamp = datetime(2019, 9, day, 9 + n * 11)
+            photos.append(photo)
+        # start/end are derived from the photos, so they need no setting.
+        return Event(index=index, photos=photos)
+
+    def test_the_read_name_wins_over_the_inferred_one(self):
+        from photo_organizer.cluster import merge_trips
+
+        read = self._event(1, 11)
+        read.place_name = "Aiguille Dibona"
+        read.name_source = "peak"
+        read.name_from_text = True
+        read.enriched_lat, read.enriched_lon = 44.9632, 6.2429
+        read.evidence = ["peak: Aiguille Dibona (read from text ...)"]
+
+        # The second day contributed only a recognised massif, which is
+        # what made the merge legal and then overwrote the read name.
+        guessed = self._event(2, 12)
+        guessed.mountain_range = "Mont Blanc Massif"
+
+        merged, joined = merge_trips([read, guessed], gap_hours=18, max_days=3)
+        self.assertEqual(joined, 1)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].place_name, "Aiguille Dibona")
+        self.assertTrue(merged[0].name_from_text)
+        self.assertAlmostEqual(merged[0].enriched_lat, 44.9632)
+
+    def test_it_wins_from_either_side_of_the_merge(self):
+        """The page may be photographed on the second day just as easily."""
+        from photo_organizer.cluster import merge_trips
+
+        guessed = self._event(1, 11)
+        guessed.mountain_range = "Mont Blanc Massif"
+
+        read = self._event(2, 12)
+        read.place_name = "Aiguille Dibona"
+        read.name_source = "peak"
+        read.name_from_text = True
+
+        merged, joined = merge_trips([guessed, read], gap_hours=18, max_days=3)
+        self.assertEqual(joined, 1)
+        self.assertEqual(merged[0].place_name, "Aiguille Dibona")
+
+    def test_two_guesses_still_clear_so_the_name_is_re_derived(self):
+        """Unchanged behaviour: pooled evidence beats the first day."""
+        from photo_organizer.cluster import merge_trips
+
+        a = self._event(1, 11)
+        a.place_name = "Somewhere"
+        a.name_source = "region"
+        b = self._event(2, 12)   # no name of its own, so it does not object
+
+        merged, joined = merge_trips([a, b], gap_hours=18, max_days=3)
+        self.assertEqual(joined, 1)
+        self.assertIsNone(merged[0].place_name)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

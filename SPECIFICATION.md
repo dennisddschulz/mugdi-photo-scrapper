@@ -692,3 +692,19 @@ deleting inside the read-only source.
 Clearing happens when a RUN starts, never inside `copy_plan`, so an
 interrupted 50 GB copy stays resumable and re-running still skips what is
 already there (R-S9).
+
+**R-N9** A name READ off a guidebook page SURVIVES A TRIP MERGE. Merging
+clears a name so it can be re-derived from the pooled evidence of the whole
+trip, which is right for a guess but wrong for a name that was read in
+print. Measured on the real library: OCR read `Aiguille Dibona` from
+`IMG_20190911_201210.jpg` in the 11 September event; the merge with 12
+September then cleared it, the re-derivation fell back to the mountain range
+Gemini had recognised, and 86 photos of the Ecrins were filed as
+`Mont-Blanc-Massif_alpine-climbing_11_09` -- 200 km wrong.
+
+The merge was itself correct (11 and 12 September were one trip), and it was
+legal precisely because one event knew a PLACE and the other only a RANGE.
+So the fix is not to merge less, it is to keep the stronger evidence: the
+read name, its coordinates and its evidence line carry across, while the
+folder name is still rebuilt so the activity and date describe the whole
+trip. Two events with no read name between them clear as before.

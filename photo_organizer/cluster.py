@@ -181,15 +181,40 @@ def merge_trips(
                 f"joined with the photos of {event.start:%d %b} "
                 f"({gap:.0f}h later): same trip"
             )
-            # Clear what was derived, so it is worked out again from
-            # everything now in the event rather than from the first day.
-            previous.place_name = None
-            previous.proposed_name = None
-            previous.name_source = None
-            previous.mountain_range = None
-            previous.region = None
-            previous.enriched_lat = previous.enriched_lon = None
-            previous.evidence = []
+            # A name READ off a guidebook page survives the merge. Everything
+            # else is re-derived, but this is not a guess to be improved on:
+            # the page said "Aiguille Dibona" in print. Clearing it threw the
+            # best evidence away and let the merged event fall back to a
+            # recognised range -- which is how 86 photos of the Dibona ended
+            # up in Mont-Blanc-Massif_alpine-climbing_11_09, two hundred
+            # kilometres from the Ecrins.
+            keeper = next(
+                (e for e in (previous, event) if e.name_from_text and e.place_name),
+                None,
+            )
+            if keeper is not None:
+                previous.place_name = keeper.place_name
+                previous.name_source = keeper.name_source
+                previous.name_from_text = True
+                previous.enriched_lat = keeper.enriched_lat
+                previous.enriched_lon = keeper.enriched_lon
+                previous.country_code = keeper.country_code or previous.country_code
+                previous.evidence = list(keeper.evidence)
+                # The folder name is still rebuilt, so the activity and date
+                # come from the whole trip rather than from one day of it.
+                previous.proposed_name = None
+                previous.mountain_range = None
+                previous.region = None
+            else:
+                # Clear what was derived, so it is worked out again from
+                # everything now in the event rather than from the first day.
+                previous.place_name = None
+                previous.proposed_name = None
+                previous.name_source = None
+                previous.mountain_range = None
+                previous.region = None
+                previous.enriched_lat = previous.enriched_lon = None
+                previous.evidence = []
             merges += 1
         else:
             merged.append(event)

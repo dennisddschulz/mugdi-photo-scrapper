@@ -125,6 +125,10 @@ class Event:
     enriched_lat: Optional[float] = None    # recovered location, not EXIF GPS
     enriched_lon: Optional[float] = None
     name_source: Optional[str] = None       # peak | crag | region | activity
+    # Set when the name was READ off a guidebook page rather than inferred.
+    # That is the strongest evidence in this project -- a printed page names
+    # the place outright -- so a merge must not throw it away (R-N9).
+    name_from_text: bool = False
     tag_summary: list[tuple[str, float]] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
 

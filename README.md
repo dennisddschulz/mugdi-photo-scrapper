@@ -630,3 +630,18 @@ touched by any of this.
 An interrupted copy is still resumable: clearing happens once when a run
 starts, not on every copy, so re-running a half-finished copy skips the
 files already written instead of starting the 50 GB again.
+
+### Multi-day trips
+
+Consecutive days join into one event when the gap is no more than a night
+and one day knows where it was. The joined event then works its name out
+again from everything now inside it -- except a name that was READ off a
+guidebook page, which survives untouched.
+
+That exception exists because of a measured failure. OCR read `Aiguille
+Dibona` off a topo in the 11 September event. Merging 11 and 12 September
+was correct, but it cleared the read name, the re-derivation fell back to
+the massif Gemini had recognised, and 86 photos of the Ecrins ended up in
+`Mont-Blanc-Massif_alpine-climbing_11_09`, 200 km from where they were
+taken. A printed page naming the place outright is the best evidence this
+tool ever gets; it does not get thrown away to be guessed at again.
