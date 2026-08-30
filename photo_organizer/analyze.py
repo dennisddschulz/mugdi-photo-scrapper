@@ -823,20 +823,33 @@ def preflight(
     # not even copies of them -- deleting the output is the user's decision
     # and their recovery story.
     try:
-        existing = [p for p in output.rglob("*") if p.is_file()]
-        if existing:
-            size = sum(p.stat().st_size for p in existing)
-            stale = sum(
-                1 for d in output.iterdir()
-                if d.is_dir() and d.name.startswith(("_duplicates", "_rejected"))
-            )
+        from .copier import OUTPUT_MARKER, unrecognised_entries
+
+        existing = [
+            p for p in output.rglob("*")
+            if p.is_file() and p.name != OUTPUT_MARKER
+        ]
+        strange = unrecognised_entries(output)
+        if strange and not (output / OUTPUT_MARKER).exists():
+            # This one is fatal: the run would refuse to clear it anyway,
+            # and finding that out after planning wastes the user's time.
             checks.append(Check(
-                "Output folder is empty", False,
-                f"{len(existing):,} file(s), {size/1e9:.1f} GB already in "
-                f"{output}. This run will add correctly-named folders BESIDE "
-                f"them, not replace them. Delete the folder first for a clean "
-                f"library; nothing in your source is affected."
-                + (f" ({stale} review folder(s) present.)" if stale else ""),
+                "Output folder is safe to use", False,
+                f"{output} holds {len(strange)} item(s) this tool did not "
+                f"write ({', '.join(strange[:4])}"
+                + (", ..." if len(strange) > 4 else "")
+                + "). It will not be emptied and the run will stop. Choose "
+                "an empty folder, or one this tool wrote before.",
+                fatal=True,
+            ))
+        elif existing:
+            size = sum(p.stat().st_size for p in existing)
+            checks.append(Check(
+                "Previous run will be cleared", True,
+                f"{len(existing):,} file(s), {size/1e9:.1f} GB from an "
+                f"earlier run in {output}. This run empties it first, so "
+                f"what you end up with is only the result of this run. "
+                f"Nothing in your source is affected.",
                 fatal=False,
             ))
     except OSError as exc:

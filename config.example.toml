@@ -158,3 +158,13 @@ peak_contradiction_km = 30.0
 # still used, but the preview says so -- that is exactly the weak evidence
 # that once produced a confident "Salbitschijen" for a photo taken 13 km
 # away. Check single-photo names before copying.
+
+# Work out content tags locally with CLIP, for EVERY photo, free.
+#
+# The paid analysis only sees a few photos per event: measured on a full
+# run, 2,522 of 13,193 copies got keywords. Covering the rest through the
+# API would cost about $53. Scored 110/119 against 24 hand-labelled photos.
+#
+# The first run embeds the library at 4.19 photos/s (about 55 minutes for
+# 13,825). Embeddings are stored, so later runs cost nothing.
+# local_tags = true

@@ -242,6 +242,34 @@ _GAZE_RANK = {"all_facing": 3, "some_facing": 2, "no_people": 1,
 _COMPOSITION_RANK = {"good": 3, "ordinary": 2, "unknown": 1, "poor": 0}
 
 
+# How sharp a frame is, measured locally rather than asked of a model.
+#
+# The photographic ranking below needs TWO analysed photos in a group to do
+# anything, and only about 9% of a library is ever analysed -- so on the
+# last full run it changed 0 of 524 groups. This covers every group instead.
+#
+# Measured downscaled, deliberately: at full resolution sensor noise reads as
+# detail, and a noisy blurred frame outscores a clean sharp one.
+SHARPNESS_EDGE = 900
+
+
+def measure_sharpness(path) -> Optional[float]:
+    """Gradient energy of one frame. Higher is sharper. None if unreadable."""
+    try:
+        import numpy as np
+        from PIL import Image, ImageFilter
+
+        with Image.open(path) as img:
+            img.draft("L", (SHARPNESS_EDGE, SHARPNESS_EDGE))
+            grey = img.convert("L")
+            grey.thumbnail((SHARPNESS_EDGE, SHARPNESS_EDGE))
+            edges = grey.filter(ImageFilter.FIND_EDGES)
+            return float(np.asarray(edges, dtype="float32").var())
+    except Exception as exc:
+        log.debug("Could not measure sharpness of %s: %s", path, exc)
+        return None
+
+
 def photographic_score(analysis) -> tuple:
     """Rank one frame on how good a PHOTOGRAPH it is. Higher is better.
 
@@ -278,15 +306,23 @@ def explain_choice(analysis) -> str:
     return ", ".join(bits)
 
 
-def best_by_analysis(groups, analyses: dict) -> int:
-    """Re-pick each group's keeper using what the model saw.
+def best_by_analysis(groups, analyses: dict, use_sharpness: bool = True) -> int:
+    """Re-pick each group's keeper on how good a photograph it is.
 
-    `analyses` maps a photo's content key to its PhotoAnalysis. Groups whose
-    members were not analysed keep the file-size answer, which is why that
-    fallback still exists.
+    `analyses` maps a photo's content key to its PhotoAnalysis. Where two
+    members of a group were analysed, the model's judgement decides --
+    sharpness, then whether people are looking at the camera, then
+    composition.
 
-    Returns how many groups changed their mind, which is worth reporting:
-    it is the measure of how much this was worth doing.
+    Where they were NOT -- which on a real run is almost every group, because
+    only about 9% of a library is analysed -- the frames are measured
+    locally for sharpness instead. That is the difference between judging
+    ~1% of groups and judging all of them. It is a weaker signal than the
+    model's: it says nothing about gaze, blinks or composition, and it
+    agrees with plain file size most of the time, since a sharper JPEG is
+    usually a bigger one. It is still a reason rather than a coincidence.
+
+    Returns how many groups changed their mind.
     """
     changed = 0
     for group in groups:
@@ -295,6 +331,18 @@ def best_by_analysis(groups, analyses: dict) -> int:
             for p in group.photos
         ]
         judged = [(s, p) for s, p in scored if s]
+        if len(judged) < 2 and use_sharpness and len(group.photos) > 1:
+            measured = [
+                (measure_sharpness(p.source_path), p) for p in group.photos
+            ]
+            measured = [(v, p) for v, p in measured if v is not None]
+            if len(measured) > 1:
+                winner = max(measured, key=lambda item: item[0])[1]
+                if winner is not group.best:
+                    changed += 1
+                group.best = winner
+                group.reason = "sharpest of the group (measured locally)"
+            continue
         if len(judged) < 2:
             continue
         # Ties fall back to the file-size ranking rather than to list order.

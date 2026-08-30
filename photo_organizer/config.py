@@ -256,6 +256,13 @@ class AnalysisConfig:
     # attempts to do it with pixel statistics all failed, because grey rock
     # and printed paper look identical to a histogram.
     detect_pages: bool = True
+    # Work out content tags locally, with the same CLIP model, for EVERY
+    # photo. The paid analysis only sees four photos per event: measured on
+    # a full run, 2,522 of 13,193 copies got keywords, and covering the rest
+    # through the API would cost about $53. This costs nothing, and photos
+    # already embedded for page detection are tagged for free because the
+    # embedding is stored. Scored 110/119 against 24 hand-labelled photos.
+    local_tags: bool = True
     # How many photos of one event to read before giving up on it. It stops
     # early as soon as a photo names a real place.
     ocr_max_photos_per_event: int = 60

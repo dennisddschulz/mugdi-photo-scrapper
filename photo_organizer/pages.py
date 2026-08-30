@@ -116,15 +116,20 @@ def _load():
         return _model, _preprocess, _text_features
 
 
-def score_path(path: Path) -> Optional[float]:
-    """How much this photo looks like a printed page, from 0 to 1."""
+def embed_path(path: Path):
+    """The normalised CLIP embedding of one photo, or None.
+
+    This is the expensive step -- about a second a photo, hours over a
+    library -- so callers store the result. Everything else in this module
+    and in tags.py is a dot product against it.
+    """
     if not available():
         return None
     import torch
     from PIL import Image
 
     try:
-        model, preprocess, text_features = _load()
+        model, preprocess, _ = _load()
         with Image.open(path) as img:
             # draft() decodes the JPEG at reduced size; CLIP wants 224px
             # anyway, so the full resolution is pure waste.
@@ -133,8 +138,32 @@ def score_path(path: Path) -> Optional[float]:
         with torch.no_grad():
             features = model.encode_image(tensor)
             features /= features.norm(dim=-1, keepdim=True)
-            similarity = (100.0 * features @ text_features.T).softmax(dim=-1)[0]
-        return float(sum(similarity[:PAGE_PROMPTS]))
+        return features[0].cpu().numpy()
+    except Exception as exc:
+        log.debug("Could not embed %s: %s", path, exc)
+        return None
+
+
+def page_score_from_embedding(vector) -> float:
+    """How much an already-embedded photo looks like a printed page."""
+    import numpy as np
+    import torch
+
+    _model, _preprocess, text_features = _load()
+    sims = 100.0 * np.asarray(vector, dtype="float32") @ (
+        text_features.cpu().numpy().T
+    )
+    probs = torch.tensor(sims).softmax(dim=-1).numpy()
+    return float(probs[:PAGE_PROMPTS].sum())
+
+
+def score_path(path: Path) -> Optional[float]:
+    """How much this photo looks like a printed page, from 0 to 1."""
+    vector = embed_path(path)
+    if vector is None:
+        return None
+    try:
+        return page_score_from_embedding(vector)
     except Exception as exc:
         log.debug("Could not score %s: %s", path, exc)
         return None

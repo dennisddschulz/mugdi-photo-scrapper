@@ -708,3 +708,45 @@ So the fix is not to merge less, it is to keep the stronger evidence: the
 read name, its coordinates and its evidence line carry across, while the
 folder name is still rebuilt so the activity and date describe the whole
 trip. Two events with no read name between them clear as before.
+
+**R-N10** CONTENT TAGS ARE WORKED OUT LOCALLY, FOR EVERY PHOTO. Tags used
+to come only from the paid analysis, which sees four photos per event:
+measured after a full run, 2,522 of 13,193 copies carried keywords (19%),
+and covering the rest through the API would cost about $53. The same CLIP
+model that finds guidebook pages now tags every photo for nothing.
+
+Only CATEGORY questions are asked, never IDENTITY ones -- no prompt names a
+mountain, and a test asserts it. Scored against 24 hand-labelled photos the
+vocabulary reaches 110/119: document 24/24, indoors 24/24, snow 23/24,
+activity 20/23, people 19/24.
+
+Three structural rules came out of that measurement, each fixing a specific
+observed failure:
+
+* no activity is emitted unless people are detected (empty snowy landscapes
+  were tagged `ski touring` 4 times in 24);
+* a photo judged a document suppresses every outdoor facet (a photograph of
+  a printed page scored `rain` at 0.99);
+* conditions are independent yes/no questions, not one softmax (`snow` and
+  `clear sky` are both true on a winter summit).
+
+`selfie` was DROPPED rather than tuned: it was right once in thirteen, and
+scored 1.00 on a climber thirty metres away. Season and time of day come
+from the timestamp, which knows them exactly and for free.
+
+**R-N11** THE CLIP EMBEDDING IS STORED, not just the scores derived from
+it. Encoding is the entire cost -- measured 4.19 photos/s, 55 minutes for
+13,825 -- while comparing an embedding against a vocabulary is a dot
+product. Storing only the page score meant any change of wording would have
+cost another full pass over the drive. 512 float32 values is 2 KB a photo,
+about 28 MB for this library. Rows made by a different model are ignored
+rather than trusted: vectors from different models are not comparable.
+
+**R-D6** THE DUPLICATE KEEPER IS JUDGED, NOT WEIGHED. The model-based
+ranking needs two ANALYSED photos in a group, and only about 9% of a
+library is analysed -- so on a full run it changed 0 of 524 groups and the
+keeper was decided by file size. Frames are now measured locally for
+sharpness when the analysis is missing, which covers every group. This is
+a weaker signal, and the docs say so: it knows nothing about gaze, blinks
+or composition, and it agrees with file size most of the time because a
+sharper JPEG is usually a bigger one.

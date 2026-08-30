@@ -90,12 +90,20 @@ def _assert_inside_output(target: Path, output_root: Path) -> None:
         ) from None
 
 
-def build_tags(analysis: PhotoAnalysis, event_tags: Sequence[str] = ()) -> list[str]:
+def build_tags(
+    analysis: Optional[PhotoAnalysis],
+    event_tags: Sequence[str] = (),
+    local_tags: Sequence[str] = (),
+) -> list[str]:
     """The keyword list for one photo.
 
     Deliberately includes the structured facts as tags too -- activity,
     season, range -- because that is how they become searchable in digiKam,
     which has no field for "mountain range".
+
+    `analysis` may be None. Most photos have no paid analysis -- measured,
+    2,522 of 13,193 after a full run -- and those still get `local_tags`,
+    which are worked out from a CLIP embedding locally and for nothing.
     """
     tags: list[str] = []
 
@@ -104,6 +112,13 @@ def build_tags(analysis: PhotoAnalysis, event_tags: Sequence[str] = ()) -> list[
             cleaned = value.strip()
             if cleaned and cleaned not in tags:
                 tags.append(cleaned)
+
+    if analysis is None:
+        for tag in local_tags:
+            add(tag)
+        for tag in event_tags:
+            add(tag)
+        return tags[:40]
 
     add(analysis.activity)
     add(analysis.scene)
@@ -122,6 +137,10 @@ def build_tags(analysis: PhotoAnalysis, event_tags: Sequence[str] = ()) -> list[
     for grade in analysis.climbing_grades:
         add(grade)
     for keyword in analysis.keywords:
+        add(keyword)
+    # What the local model saw. Free, and available for every photo rather
+    # than the 19% the paid analysis reaches.
+    for keyword in local_tags:
         add(keyword)
 
     # NOT tagged, on purpose:
@@ -157,11 +176,53 @@ def _gps_rational(value: float) -> str:
     return f"{degrees}/1 {minutes}/1 {seconds}/100"
 
 
+def _apply(target, xmp, iptc, exif, event_location, write_gps, stats) -> bool:
+    """Write the collected fields into one file. Shared by both paths.
+
+    GPS comes from the EVENT, never from a single photo: measured on this
+    library, individual estimates put Swiss photos in California, while
+    several photos of one outing agreeing is real evidence.
+    """
+    import pyexiv2
+
+    lat, lon = (event_location or (None, None))
+    if write_gps and lat is not None and lon is not None and -90 <= lat <= 90:
+        exif["Exif.GPSInfo.GPSLatitude"] = _gps_rational(lat)
+        exif["Exif.GPSInfo.GPSLatitudeRef"] = "N" if lat >= 0 else "S"
+        exif["Exif.GPSInfo.GPSLongitude"] = _gps_rational(lon)
+        exif["Exif.GPSInfo.GPSLongitudeRef"] = "E" if lon >= 0 else "W"
+        exif["Exif.GPSInfo.GPSProcessingMethod"] = ESTIMATED_GPS_METHOD
+        xmp["Xmp.exif.GPSLatitude"] = f"{lat:.6f}"
+        xmp["Xmp.exif.GPSLongitude"] = f"{lon:.6f}"
+        stats.gps_written += 1
+
+    if not (xmp or iptc or exif):
+        return False
+
+    try:
+        with pyexiv2.Image(str(target)) as img:
+            if xmp:
+                img.modify_xmp(xmp)
+            if iptc:
+                img.modify_iptc(iptc)
+            if exif:
+                img.modify_exif(exif)
+    except Exception as exc:
+        stats.failed += 1
+        stats.errors.append(f"{target.name}: {exc}")
+        log.debug("Could not write metadata to %s: %s", target, exc)
+        return False
+
+    stats.written += 1
+    return True
+
+
 def write_analysis(
     target: Path,
-    analysis: PhotoAnalysis,
+    analysis: Optional[PhotoAnalysis],
     output_root: Path,
     event_tags: Sequence[str] = (),
+    local_tags: Sequence[str] = (),
     event_title: Optional[str] = None,
     event_location: Optional[tuple[float, float]] = None,
     write_gps: bool = True,
@@ -193,7 +254,7 @@ def write_analysis(
         stats.errors.append(unavailable_reason())
         return False
 
-    tags = build_tags(analysis, event_tags)
+    tags = build_tags(analysis, event_tags, local_tags)
     xmp: dict = {}
     iptc: dict = {}
     exif: dict = {}
@@ -203,6 +264,15 @@ def write_analysis(
         # IPTC keywords are what older tools read; digiKam reads both.
         iptc["Iptc.Application2.Keywords"] = tags[:32]
         stats.tags_written += 1
+
+    # Everything below describes what the PAID analysis saw. A photo with
+    # only local tags still gets its keywords, its title and the event's
+    # agreed position -- it just has no caption or star rating, because
+    # nothing has judged it.
+    if analysis is None:
+        if event_title:
+            xmp["Xmp.dc.title"] = {"lang=x-default": event_title[:120]}
+        return _apply(target, xmp, iptc, exif, event_location, write_gps, stats)
 
     if analysis.caption:
         xmp["Xmp.dc.description"] = {"lang=x-default": analysis.caption[:500]}

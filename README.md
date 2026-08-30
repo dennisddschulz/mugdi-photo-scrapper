@@ -645,3 +645,47 @@ the massif Gemini had recognised, and 86 photos of the Ecrins ended up in
 `Mont-Blanc-Massif_alpine-climbing_11_09`, 200 km from where they were
 taken. A printed page naming the place outright is the best evidence this
 tool ever gets; it does not get thrown away to be guessed at again.
+
+### Content tags
+
+Every photo gets tags, worked out on your machine for nothing: what the
+terrain is, whether there are people, what they are doing, snow, fog, a
+clear sky, indoors, food, a photographed document -- plus the season and
+time of day, which come from the timestamp rather than the pixels.
+
+This exists because the paid analysis only reaches four photos an event.
+After a full run, 2,522 of 13,193 copies had keywords. The rest would have
+cost about $53 through the API.
+
+It asks only what CLIP is good at. "Is this a printed page?" is a category
+question and it answers 24 of 24; "which mountain is this?" is an identity
+question and it answers K2 for a forest slope, so it is never asked.
+Scored against 24 hand-labelled photos:
+
+```
+document  24/24     indoors  24/24     snow  23/24
+activity  20/23     people   19/24     TOTAL 110/119
+```
+
+`selfie` was removed rather than improved -- right once in thirteen tries,
+and 1.00 on a climber thirty metres away. Activities are deliberately
+coarse (`climbing`, not `ice climbing` versus `via ferrata`) because the
+fine distinctions measured wrong.
+
+The first run spends about 55 minutes embedding the library (4.19 photos/s,
+measured). That is stored, so every later run is instant -- and a change to
+the tag vocabulary costs a dot product rather than another pass over the
+drive.
+
+### Which duplicate is kept
+
+Where the paid analysis looked at two frames of a group, it decides:
+sharpness first, then whether people are looking at the camera, then
+composition. That is the good answer, and it is rarely available -- about
+9% of a library is analysed, so on a full run it changed 0 of 524 groups.
+
+Every other group is now measured locally for sharpness instead. Be aware
+of what that is worth: it says nothing about gaze, blinks or composition,
+and it usually agrees with plain file size, because a sharper JPEG is a
+bigger one. It is a reason rather than a coincidence, which is the most
+that can honestly be claimed for it.

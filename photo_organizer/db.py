@@ -115,6 +115,20 @@ CREATE TABLE IF NOT EXISTS page_score (
     score        REAL NOT NULL
 );
 
+-- The CLIP image embedding, kept so the ENCODE is done once and never again.
+-- Encoding is the whole cost (about a second a photo on this machine, hours
+-- over a library); comparing an embedding against a new vocabulary is a dot
+-- product. Storing the score alone meant every change of wording would have
+-- cost another full pass over the drive. 512 floats is 2 KB a photo, about
+-- 28 MB for this library.
+CREATE TABLE IF NOT EXISTS clip_embedding (
+    content_hash TEXT PRIMARY KEY,
+    made_at      TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    dims         INTEGER NOT NULL,
+    vector       BLOB NOT NULL
+);
+
 -- Batch jobs, so a submitted job survives the app being closed. A batch can
 -- take up to 24 hours; losing the job name would mean paying twice.
 CREATE TABLE IF NOT EXISTS batch_job (
@@ -579,6 +593,51 @@ class AnalysisStore:
                 (content_hash, datetime.now().isoformat(timespec="seconds"),
                  float(score)),
             )
+
+    def get_embedding(self, content_hash: str, model: str):
+        """The stored CLIP vector for these bytes, or None.
+
+        Returns a float32 numpy array. Rows made by a different model are
+        ignored rather than trusted: vectors from different models are not
+        comparable, and silently mixing them would produce confident
+        nonsense.
+        """
+        if not content_hash:
+            return None
+        import numpy as np
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT vector, dims FROM clip_embedding"
+                " WHERE content_hash=? AND model=?",
+                (content_hash, model),
+            ).fetchone()
+        if row is None:
+            return None
+        vector = np.frombuffer(row["vector"], dtype="<f4")
+        return vector if vector.size == row["dims"] else None
+
+    def put_embedding(self, content_hash: str, model: str, vector) -> None:
+        if not content_hash:
+            return
+        import numpy as np
+
+        flat = np.asarray(vector, dtype="<f4").ravel()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO clip_embedding"
+                " (content_hash, made_at, model, dims, vector) VALUES (?,?,?,?,?)"
+                " ON CONFLICT(content_hash) DO UPDATE SET"
+                "  made_at=excluded.made_at, model=excluded.model,"
+                "  dims=excluded.dims, vector=excluded.vector",
+                (content_hash, datetime.now().isoformat(timespec="seconds"),
+                 model, int(flat.size), flat.tobytes()),
+            )
+
+    def embedding_count(self) -> int:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM clip_embedding").fetchone()[0]
 
     def text_count(self) -> int:
         with self._connect() as conn:
