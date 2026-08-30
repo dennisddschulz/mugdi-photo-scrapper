@@ -265,21 +265,19 @@ class AnalysisConfig:
     local_tags: bool = True
     # Words that mark a photographed page as paperwork rather than a
     # guidebook. Checked against the text OCR already read, so it costs
-    # nothing. Text beats a classifier here: "IKEA" on a page is certain,
+    # nothing. Text beats a classifier here: a word on the page is certain,
     # while a similarity score is a judgement.
     #
-    # Matches are set aside in _rejected_review/paperwork/ -- never deleted,
-    # and never removed from the source (CLAUDE.md rules 1 and 4). Delete
-    # that one folder yourself once you have glanced at it.
+    # EMPTY BY DEFAULT, on purpose. A list of shops and banks guessed at from
+    # the outside is invention, not evidence -- it would throw away photos on
+    # a hunch about which supermarket someone uses. Put YOUR words here: the
+    # shops whose receipts you photograph, your bank, your insurer.
     #
-    # Add your own: shops you photograph receipts in, your bank, your
-    # insurer. Matching is case-insensitive and on whole words.
-    document_blacklist: tuple = (
-        "ikea", "migros", "coop", "aldi", "lidl", "denner",
-        "rechnung", "quittung", "kassenbon", "beleg", "mahnung",
-        "invoice", "receipt", "vat", "billett", "facture",
-        "steuererklarung", "versicherung", "police",
-    )
+    # Matching is whole-word and case-insensitive, so "vat" will not fire on
+    # "private". Matches are set aside in _rejected_review/paperwork/ --
+    # never deleted, and never removed from the source (CLAUDE.md rules 1
+    # and 4).
+    document_blacklist: tuple = ()
     # How many photos of one event to read before giving up on it. It stops
     # early as soon as a photo names a real place.
     ocr_max_photos_per_event: int = 60

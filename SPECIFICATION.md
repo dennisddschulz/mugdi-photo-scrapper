@@ -785,10 +785,11 @@ and then discarded, so the same photo failed twice and reported only
 **R-D7** PAPERWORK IS SET ASIDE, NEVER DELETED. A receipt, ticket or price
 tag is a picture of paper and is rubbish; a guidebook topo is a picture of
 paper and is what named the Aiguille Dibona. They are separated two ways:
-a blacklist of words checked against the OCR text already read (IKEA,
-Rechnung, Migros -- extend it in `analysis.document_blacklist`), and, for
+a blacklist of words checked against the OCR text already read -- EMPTY by
+default, because guessing which shops a person uses is invention rather than
+evidence, and the user fills it in `analysis.document_blacklist` -- and, for
 pages with no matching word, a CLIP score with a deliberately high bar of
-0.90.
+0.90, which is what actually does the work.
 
 Measured: of 436 photos scoring >= 0.85 as printed pages, 17 score >= 0.90
 as paperwork. The twelve most paperwork-like were inspected and all twelve

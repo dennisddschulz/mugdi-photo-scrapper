@@ -723,10 +723,11 @@ and nothing is ever removed from the source.
 Two things separate a receipt from a guidebook topo, which are both
 pictures of paper:
 
-* the words on it, checked against `analysis.document_blacklist` (IKEA,
-  Rechnung, Migros, invoice, Billett...). Add your own shops, bank or
-  insurer -- whole-word and case-insensitive, so `vat` will not fire on
-  `private`;
+* the words on it, checked against `analysis.document_blacklist`. This is
+  EMPTY by default -- a list of shops and banks guessed at from the outside
+  is invention, not evidence. Put your own words in it: the shops whose
+  receipts you photograph, your bank, your insurer. Whole-word and
+  case-insensitive, so `vat` will not fire on `private`;
 * failing that, a CLIP score with a high bar (0.90), because sending a
   guidebook page to the review folder is a worse mistake than leaving a
   receipt in the library.
