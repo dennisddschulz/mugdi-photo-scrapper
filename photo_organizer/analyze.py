@@ -1480,6 +1480,17 @@ def analyze_plan(
             for event in plan.events:
                 if event.proposed_name:
                     continue
+                # ...except a name READ IN PRINT. merge_trips keeps it but
+                # clears proposed_name so the folder string picks up the
+                # whole trip's activity and dates -- which sent the event
+                # straight back through re-derivation, where the model's
+                # own guess for Aiguille Dibona scored 31%, under the 50%
+                # floor, and the event was renamed after a region 200 km
+                # away. Rebuild the string; do not revisit the name.
+                if event.name_from_text and event.place_name:
+                    build_folder_name(event, config.naming,
+                                      peak_source=event.name_source or "peak")
+                    continue
                 found = [
                     known.get(p.content_key)
                     for p in select_photos(event, settings.photos_per_event)

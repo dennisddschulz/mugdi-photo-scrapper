@@ -546,3 +546,36 @@ class TestTheCantonBeatsTheClaimedMassif(unittest.TestCase):
         build_folder_name(event, Config().naming)
         self.assertNotIn("Alps", event.proposed_name)
         self.assertIn("Aiguille-Dibona", event.proposed_name)
+
+
+class TestAReadNameSurvivesTheRebuild(unittest.TestCase):
+    """The Dibona bug, third and final form.
+
+    merge_trips keeps a name read in print, but clears proposed_name so the
+    folder string picks up the whole trip's activity and dates. That sent
+    the event back through re-derivation, where the model's own guess for
+    Aiguille Dibona scored 31% -- under the 50% floor -- and the event was
+    renamed after a region 200 km away. The name is kept; only the string
+    is rebuilt.
+    """
+
+    def test_the_rebuild_keeps_the_place_name(self):
+        from photo_organizer.analyze import build_folder_name
+        from photo_organizer.config import Config
+        from photo_organizer.models import Event, Photo
+
+        photo = Photo(source_path=Path("/src/a.jpg"))
+        photo.timestamp = datetime(2019, 9, 11, 9)
+        event = Event(index=1, photos=[photo])
+        event.place_name = "Aiguille Dibona"
+        event.name_from_text = True
+        event.name_source = "peak"
+        event.region, event.country_code = "Rhone-Alpes", "FR"
+        event.activity = "climbing"
+        event.proposed_name = None          # what merge_trips leaves behind
+
+        build_folder_name(event, Config().naming, peak_source="peak")
+        self.assertIn("Aiguille-Dibona", event.proposed_name)
+        self.assertIn("Rhone-Alpes", event.proposed_name)
+        self.assertIn("climbing", event.proposed_name)
+        self.assertEqual(event.place_name, "Aiguille Dibona")
